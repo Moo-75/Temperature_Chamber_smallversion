@@ -269,12 +269,13 @@ void applySignedDuty(float u) {
   }
   digitalWrite(R_EN, HIGH);
   digitalWrite(L_EN, HIGH);
+  // Existing B+/B- wiring heats on RPWM (D9/OCR1A) and cools on LPWM (D10/OCR1B).
   if (u > 0.0f) {
-    OCR1A = 0;
-    OCR1B = ticks;
-  } else {
     OCR1A = ticks;
     OCR1B = 0;
+  } else {
+    OCR1A = 0;
+    OCR1B = ticks;
   }
 }
 
@@ -298,10 +299,12 @@ float measure_temp(int pin) {
   }
 
   float average_adc = total / NUM_SAMPLES;
-  if (average_adc < 1.0f) {
+  if (average_adc < 1.0f || average_adc > 1022.0f) {
     return NAN;
   }
-  float resistance = SERIES_RESISTOR * (1023.0f / average_adc - 1.0f);
+  // Same divider as Temperature_Chamber: NTC to GND, 10k to VCC.
+  // R = SERIES / (1023/ADC - 1). The inverted form maps 20 C to ~30 C.
+  float resistance = SERIES_RESISTOR / (1023.0f / average_adc - 1.0f);
   if (resistance <= 0.0f) {
     return NAN;
   }

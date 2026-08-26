@@ -26,8 +26,8 @@ GPIO 14/15는 시리얼 콘솔용으로 비움. 펠티어 PWM은 Arduino 핀이�
 |---|---|
 | KY-013 S | A0 |
 | KY-013 VCC / GND | 5V / GND (가운데 핀이 VCC) |
-| BTS7960 RPWM (냉각) | D9 |
-| BTS7960 LPWM (가열) | D10 |
+| BTS7960 RPWM (가열) | D9 |
+| BTS7960 LPWM (냉각) | D10 |
 | BTS7960 R_EN | D7 |
 | BTS7960 L_EN | D8 |
 

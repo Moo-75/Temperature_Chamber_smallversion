@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 """
-Run on the Raspberry Pi. Push the CONTENTS of a selected parent folder
-(the folder that holds session folders) to the Linux server.
+Run on the Raspberry Pi. Push the contents of experiment parent folders or
+standalone session folders to the Linux server.
 
 On this network the Pi CAN reach the server (ssh -p 6022) but CANNOT reach the
 lab PC, so we push to the server instead of the PC.
 
-Only "parent" folders are offered for selection: a parent is a folder whose
-immediate subfolders are experiment session folders (folders that directly
-contain files like Temperature_*.csv / Video_*.mp4 / SensorTime_*.csv /
-TD_*_trial-wise.csv). Individual session folders and unrelated folders are NOT
-listed.
-
-The parent folder itself is NOT copied; only its contents are. Example:
-
-    Pi:      ~/Desktop/BRL/{session1, session2}
-    pick "BRL"  ->
-    server:  /data/Siheon_chamber_data/{session1, session2}
+Supports two folder structures:
+1. Parent folder (e.g. ~/Desktop/OBT, ~/Desktop/TEMP_TEST):
+   A folder containing multiple session subfolders. The session folders inside it
+   are transferred to /data/Siheon_chamber_data/<session>.
+2. Standalone Session folder (e.g. ~/Desktop/test):
+   A folder directly containing experiment files (Temperature_*.csv, etc.).
+   The folder itself is transferred to /data/Siheon_chamber_data/<session>.
 
 Usage:
     python3 migrate_to_server.py
@@ -118,9 +114,18 @@ def default_bases() -> list[Path]:
     return bases
 
 
-def discover_parents(bases: list[Path], max_depth: int) -> list[dict]:
-    """Find folders whose immediate subfolders are experiment session folders."""
+def discover_targets(bases: list[Path], max_depth: int) -> list[dict]:
+    """
+    Find:
+    1) Parent folders (folders whose immediate subfolders are session folders)
+    2) Standalone session folders (folders directly containing experiment files)
+    """
     parents: dict[Path, dict] = {}
+    standalone_sessions: dict[Path, dict] = {}
+
+    home_resolved = Path.home().resolve()
+    protected_roots = {Path("/"), home_resolved, home_resolved / "Desktop"}
+
     for base in bases:
         base = base.resolve()
         if not base.is_dir():
@@ -131,40 +136,66 @@ def discover_parents(bases: list[Path], max_depth: int) -> list[dict]:
             dirnames[:] = visible_dirs
 
             depth = len(root_path.relative_to(base).parts)
-            # Decide (using the pre-prune list) whether this folder is a parent,
-            # then stop descending past max_depth.
             session_children = [
                 name for name in visible_dirs if is_session_dir(root_path / name)
             ]
             if depth >= max_depth:
                 dirnames[:] = []
 
-            if not session_children:
-                continue
             try:
                 key = root_path.resolve()
             except OSError:
                 continue
-            # Do not allow root, home, or Desktop itself to be treated as a parent folder
-            # (which would transfer and attempt to delete the entire Desktop/Home).
-            home_resolved = Path.home().resolve()
-            if key in {Path("/"), home_resolved, home_resolved / "Desktop"}:
+
+            # Standalone session folder
+            if is_session_dir(root_path) and key not in protected_roots:
+                files, size = summarize(root_path)
+                standalone_sessions[key] = {
+                    "path": root_path,
+                    "kind": "Session",
+                    "sessions": 1,
+                    "files": files,
+                    "size": size,
+                }
+
+            if not session_children:
+                continue
+            if key in protected_roots:
                 continue
             if key in parents:
                 continue
+
             files, size = summarize(root_path)
             parents[key] = {
                 "path": root_path,
+                "kind": "Parent",
                 "sessions": len(session_children),
                 "files": files,
                 "size": size,
             }
-    return sorted(parents.values(), key=lambda item: str(item["path"]).lower())
+
+    targets: list[dict] = []
+    for parent_info in parents.values():
+        targets.append(parent_info)
+
+    parent_paths = [p["path"] for p in parents.values()]
+    for session_info in standalone_sessions.values():
+        session_path = session_info["path"]
+        is_inside_parent = False
+        for p_path in parent_paths:
+            try:
+                session_path.relative_to(p_path)
+                is_inside_parent = True
+                break
+            except ValueError:
+                pass
+        if not is_inside_parent:
+            targets.append(session_info)
+
+    return sorted(targets, key=lambda item: str(item["path"]).lower())
 
 
 def _control_opts() -> list[str]:
-    # Reuse one authenticated master connection for every ssh/scp/rsync in this
-    # run, so the password is asked at most once instead of once per command.
     return [
         "-o", "ControlMaster=auto",
         "-o", "ControlPath=/tmp/migrate_ctl_%r@%h:%p",
@@ -181,8 +212,6 @@ def _popen_env():
 
 
 def _wrap(cmd: list[str]) -> list[str]:
-    # Prepend sshpass (if enabled) so the whole ssh/scp/rsync command is fed the
-    # password non-interactively.
     return [*_SSHPASS_PREFIX, *cmd]
 
 
@@ -218,8 +247,6 @@ def ensure_remote_dir(args: argparse.Namespace) -> None:
     run_printed(_wrap([*ssh_base(args), args.target, f"mkdir -p {shell_quote(args.dest)}"]))
 
 
-# Matches the fields of an `rsync --info=progress2` line, e.g.
-#   722.08M  19%    8.88MB/s    0:05:33 (xfr#14, to-chk=18/39)
 _PROGRESS_RE = re.compile(r"(\d+)%\s+(\S+/s)\s+(\d+:\d\d:\d\d)")
 
 
@@ -269,12 +296,17 @@ def run_rsync_with_bar(cmd: list[str]) -> None:
         raise subprocess.CalledProcessError(proc.returncode, cmd)
 
 
-def transfer(args: argparse.Namespace, parent: Path) -> None:
+def transfer(args: argparse.Namespace, target_info: dict) -> None:
     ensure_remote_dir(args)
     dest = args.dest.rstrip("/")
     remote_dest = f"{args.target}:{shell_quote(dest + '/')}"
+    target_path = target_info["path"]
+    is_parent = (target_info["kind"] == "Parent")
 
     if shutil.which("rsync") and remote_has_rsync(args):
+        # Trailing slash for parent => copy the CONTENTS
+        # No trailing slash for session => copy the FOLDER itself
+        src = str(target_path) + (os.sep if is_parent else "")
         cmd = _wrap([
             "rsync",
             "-ah",
@@ -282,34 +314,39 @@ def transfer(args: argparse.Namespace, parent: Path) -> None:
             "--partial",
             "-e",
             ssh_command_string(args),
-            str(parent) + os.sep,   # trailing slash => copy the CONTENTS, not the folder
+            src,
             remote_dest,
         ])
         run_rsync_with_bar(cmd)
         return
 
-    # scp fallback: copy each immediate child into the destination directory.
+    # scp fallback
     print("rsync unavailable on one side; falling back to scp per item.")
     scp = ["scp", "-P", str(args.port), *_control_opts()]
     if args.identity_file:
         scp += ["-i", args.identity_file]
     for option in args.ssh_option:
         scp += ["-o", option]
-    for child in sorted(parent.iterdir(), key=lambda p: p.name):
-        if child.name.startswith("."):
-            continue
-        run_printed(_wrap([*scp, "-r", str(child), remote_dest]))
+
+    if is_parent:
+        for child in sorted(target_path.iterdir(), key=lambda p: p.name):
+            if child.name.startswith("."):
+                continue
+            run_printed(_wrap([*scp, "-r", str(child), remote_dest]))
+    else:
+        run_printed(_wrap([*scp, "-r", str(target_path), remote_dest]))
 
 
-def prompt_choice(parents: list[dict]) -> Path:
-    print("\nParent folders on the Raspberry Pi (each holds session folders):")
-    for index, item in enumerate(parents, start=1):
+def prompt_choice(targets: list[dict]) -> dict:
+    print("\nAvailable folders to transfer to the Linux server:")
+    for index, item in enumerate(targets, start=1):
+        kind_tag = f"[{item['kind']}]"
         print(
-            f"  {index:>2}. {item['path']}  "
+            f"  {index:>2}. {kind_tag:<9} {item['path']}  "
             f"({item['sessions']} sessions, {item['files']} files, {format_bytes(item['size'])})"
         )
     while True:
-        raw = input("\nSend which parent folder's contents to the server? number, or q to quit: ").strip()
+        raw = input("\nSend which folder to the server? number, or q to quit: ").strip()
         if raw.lower() in {"q", "quit", "exit"}:
             raise SystemExit(0)
         try:
@@ -317,33 +354,40 @@ def prompt_choice(parents: list[dict]) -> Path:
         except ValueError:
             print("Please enter a number from the list.")
             continue
-        if 1 <= index <= len(parents):
-            return parents[index - 1]["path"]
+        if 1 <= index <= len(targets):
+            return targets[index - 1]
         print("That number is not in the list.")
 
 
-def maybe_delete(parent: Path) -> None:
-    raw = input(f"\nDelete the copied contents from the Pi folder {parent}? [y/N]: ").strip().lower()
+def maybe_delete(target_info: dict) -> None:
+    target_path = target_info["path"]
+    is_parent = (target_info["kind"] == "Parent")
+    action_str = f"the copied contents from the folder {target_path}" if is_parent else f"the session folder {target_path}"
+    raw = input(f"\nDelete {action_str}? [y/N]: ").strip().lower()
     if raw not in {"y", "yes"}:
         print("Left the files in place on the Pi.")
         return
 
-    resolved = parent.resolve()
+    resolved = target_path.resolve()
     home = Path.home().resolve()
-    if resolved in {Path("/"), home, home / "Desktop"} or len(resolved.parts) < 4:
+    if resolved in {Path("/"), home, home / "Desktop"} or len(resolved.parts) < 3:
         raise SystemExit(f"Refusing to delete unsafe path: {resolved}")
 
-    for child in parent.iterdir():
-        if child.is_dir() and not child.is_symlink():
-            shutil.rmtree(child)
-        else:
-            child.unlink()
-    print("Deleted the folder contents on the Pi (kept the parent folder itself).")
+    if is_parent:
+        for child in target_path.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        print(f"Deleted the folder contents on the Pi (kept {target_path} itself).")
+    else:
+        shutil.rmtree(target_path)
+        print(f"Deleted session folder {target_path} on the Pi.")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="On the Pi: push a parent folder's contents to the Linux server.",
+        description="On the Pi: push experiment data to the Linux server.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -397,18 +441,23 @@ def main(argv: list[str] | None = None) -> int:
             print("       Install it (sudo apt install sshpass) or set up SSH keys for passwordless login.\n")
 
     bases = [Path(item).expanduser() for item in args.search_base] if args.search_base else default_bases()
-    parents = discover_parents(bases, args.max_depth)
-    if not parents:
-        print("No parent folders containing session folders were found.")
-        print("A session folder directly contains files like Temperature_*.csv or Video_*.mp4.")
+    targets = discover_targets(bases, args.max_depth)
+    if not targets:
+        print("No parent folders or session folders containing experiment data were found.")
+        print("Expected files: Temperature_*.csv, SensorTime_*.csv, TD_*.csv, temp_test_*.csv, etc.")
         print("Try --search-base <dir> or a larger --max-depth.")
         return 1
 
-    parent = prompt_choice(parents)
-    print(f"\nSending CONTENTS of {parent}")
+    target_info = prompt_choice(targets)
+    target_path = target_info["path"]
+    if target_info["kind"] == "Parent":
+        print(f"\nSending CONTENTS of {target_path}")
+    else:
+        print(f"\nSending FOLDER {target_path}")
     print(f"     -> {args.target}:{args.dest}  (port {args.port})")
+
     try:
-        transfer(args, parent)
+        transfer(args, target_info)
         print("Transfer complete.")
     except subprocess.CalledProcessError as e:
         print(f"\n[오류] 서버 전송 중 오류가 발생했습니다 (종료 코드 {e.returncode}).")
@@ -421,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if not args.no_delete_prompt:
-        maybe_delete(parent)
+        maybe_delete(target_info)
     return 0
 
 

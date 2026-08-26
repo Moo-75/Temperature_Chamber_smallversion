@@ -20,19 +20,18 @@ const unsigned long interval = 100;
 const float SPIKE_C = 1.2f;
 const float RATE_TAU_SEC = 1.2f;
 
-// Robust PID with Derivative on Measurement (Damping)
-// 1) KP = 0.22: 1°C error gives ~22% duty, >4.5°C gives 100% full saturation for fast jumps.
-// 2) KD = 1.60: Strong damping against velocity. When moving fast toward target,
-//    -KD * (dT/dt) naturally decelerates the Peltier output to prevent overshoot.
-// 3) KI = 0.012: Gentle integral to remove steady-state error without inducing windup.
-const float KP = 0.22f;
-const float KD = 1.60f;
-const float KI = 0.012f;
-const float I_MAX = 0.60f;
-const float TT_AW = 0.8f;
+// Robust PID with Derivative on Measurement (Damping) & Clamping Anti-Windup
+// 1) KP = 0.25: ±4°C error provides 100% full saturation for fast transition.
+// 2) KD = 1.00: Smooth braking on velocity (-KD * dT/dt) to prevent overshoot.
+// 3) KI = 0.025: Clean integral to eliminate steady-state error in < 8s.
+// 4) Clamping Anti-windup: Freezes integrator during saturation to prevent windup.
+const float KP = 0.25f;
+const float KD = 1.00f;
+const float KI = 0.025f;
+const float I_MAX = 0.50f;
 
-// Slew rate limit: output change cannot exceed ±8% per 100ms cycle (~1.25s for 0->100%).
-const float DU_MAX = 0.08f;
+// Slew rate limit: output change cannot exceed ±15% per 100ms cycle (~0.67s for 0->100%).
+const float DU_MAX = 0.15f;
 
 float target_temperature = 25.0f;
 bool is_running = true;
@@ -106,6 +105,9 @@ void handleSerialCommands() {
     } else if (command.startsWith("SET_TEMP")) {
       float parsed_temp;
       if (readFloatArgument(command, parsed_temp)) {
+        if (fabs(parsed_temp - target_temperature) > 1.0f) {
+          i_term = 0.0f;  // Clear stale integrator bias on setpoint jump
+        }
         target_temperature = parsed_temp;
       } else {
         Serial.println("ERR");
@@ -221,9 +223,14 @@ void runTemperatureControl() {
   float u_unsat = p_term + d_term + i_term;
   float u = clampf(u_unsat, -1.0f, 1.0f);
 
-  // 3) Anti-windup back-calculation for integral term
-  i_term += DT_SEC * (KI * error + (u - u_unsat) / TT_AW);
-  i_term = clampf(i_term, -I_MAX, I_MAX);
+  // 3) Conditional Integration (Clamping Anti-Windup)
+  // Freeze integrator if output is saturated in the direction of error
+  bool saturating_high = (u_unsat >= 1.0f) && (error > 0.0f);
+  bool saturating_low  = (u_unsat <= -1.0f) && (error < 0.0f);
+  if (!saturating_high && !saturating_low) {
+    i_term += DT_SEC * (KI * error);
+    i_term = clampf(i_term, -I_MAX, I_MAX);
+  }
 
   // 4) Rate limiter on final duty cycle
   float du = clampf(u - u_applied, -DU_MAX, DU_MAX);

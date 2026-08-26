@@ -13,43 +13,30 @@ const int R_EN = 7;
 const int L_EN = 8;
 const int PWM_TOP = 3124;
 
-// Loop period (s). Keep in sync with `interval`.
 const float DT_SEC = 0.10f;
 const unsigned long interval = 100;
 
-// Sensor-to-Peltier conduction lag (s). Cut power when T_pred hits target,
-// not when the delayed sensor does. Geometry-dominated; not a PWM table.
-const float TAU_SEC = 5.0f;
-
-// Ignore tiny dT/dt so ADC noise does not move T_pred.
-const float MIN_RATE_C_PER_S = 0.025f;
-
-// Reject one-sample glitches (not a mouse sitting slowly on the sensor).
+// Used only to brake a fast approach. Hold / integral always use the sensor.
+const float TAU_SEC = 3.5f;
+const float MIN_RATE_C_PER_S = 0.08f;
 const float SPIKE_C = 1.2f;
+const float RATE_TAU_SEC = 1.5f;
 
-// Rate EMA time constant (s). Smaller = noisier T_pred, larger = later landing.
-const float RATE_TAU_SEC = 1.0f;
-
-// Nominal dT/dt at |u|=1 near room temperature. Underestimate slightly.
-// Heating vs cooling differ (Joule heat helps heat, fights cool).
 const float B0_HEAT = 0.40f;
 const float B0_COOL = 0.28f;
 
-// Disturbance observer bandwidth (1/s) on residual: dT/dt - b0*u - f_hat.
-// FAST during strong actuation so f_hat tracks leak as T itself moves
-// (10 C vs 40 C). SLOW near hold so ADC/mouse jitter is not chased.
 const float OBS_L_FAST = 1.6f;
-const float OBS_L_SLOW = 0.55f;
+const float OBS_L_SLOW = 0.35f;
 const float OBS_F_MAX = 1.8f;
 
-// P on predicted error. |e_pred| > 1/KP saturates -> full PWM (fast approach).
-const float KP = 0.48f;
-
-// Weak integral for leftover bias after the observer. Anti-windup via
-// back-calculation so I does not store "100%" during a long approach.
-const float KI = 0.04f;
+// P on sensor error. Milder than before so hold does not bang heat/cool.
+const float KP = 0.28f;
+const float KI = 0.035f;
 const float TT_AW = 0.8f;
 const float I_MAX = 0.85f;
+
+// Max |du| per 100 ms. 0->100% takes ~1.2 s instead of one sample.
+const float DU_MAX = 0.12f;
 
 float target_temperature = 25.0f;
 bool is_running = true;
@@ -66,6 +53,9 @@ float u_applied = 0.0f;
 float last_t = NAN;
 float last_t_pred = NAN;
 float last_u = 0.0f;
+float last_adc = NAN;
+float last_ohm = NAN;
+int last_pwm = 0;
 
 bool readFloatArgument(String command, float &value);
 void handleSerialCommands();
@@ -104,6 +94,7 @@ void loop() {
       stopMotor();
       u_applied = 0.0f;
       last_u = 0.0f;
+      last_pwm = 0;
       rate_c_per_s *= 0.85f;
     }
   }
@@ -121,7 +112,6 @@ void handleSerialCommands() {
       float parsed_temp;
       if (readFloatArgument(command, parsed_temp)) {
         target_temperature = parsed_temp;
-        // Keep f_hat / i_term: they are the current thermal load, not the old target.
       } else {
         Serial.println("ERR");
       }
@@ -131,10 +121,11 @@ void handleSerialCommands() {
       is_running = false;
       stopMotor();
       u_applied = 0.0f;
+      last_pwm = 0;
     } else if (command.equals("GET_TARGET")) {
       Serial.println(target_temperature, 4);
     } else if (command.equals("GET_CTRL")) {
-      // t,t_pred,rate,u,f_hat,i,target
+      // t,t_pred,rate,u,f_hat,i,target,adc,ohm,pwm
       Serial.print(last_t, 3);
       Serial.print(',');
       Serial.print(last_t_pred, 3);
@@ -147,7 +138,13 @@ void handleSerialCommands() {
       Serial.print(',');
       Serial.print(i_term, 3);
       Serial.print(',');
-      Serial.println(target_temperature, 3);
+      Serial.print(target_temperature, 3);
+      Serial.print(',');
+      Serial.print(last_adc, 1);
+      Serial.print(',');
+      Serial.print(last_ohm, 1);
+      Serial.print(',');
+      Serial.println(last_pwm);
     }
   }
 }
@@ -204,6 +201,7 @@ void runTemperatureControl() {
     stopMotor();
     u_applied = 0.0f;
     last_u = 0.0f;
+    last_pwm = 0;
     last_t_pred = NAN;
     return;
   }
@@ -240,14 +238,25 @@ void runTemperatureControl() {
     f_hat = clampf(f_hat, -OBS_F_MAX, OBS_F_MAX);
   }
 
-  float e_pred = target_temperature - t_pred;
-  float b0_cmd = (e_pred >= 0.0f) ? B0_HEAT : B0_COOL;
-  float u_unsat = (KP * e_pred + i_term - f_hat) / b0_cmd;
+  // Regulate the sensor to target. T_pred only cancels P once the lag
+  // has already reached the setpoint, so hold cannot stall 2-3 C early.
+  float e_sensor = target_temperature - curr;
+  float u_p = KP * e_sensor;
+  bool pred_past_target = (e_sensor > 0.0f && t_pred >= target_temperature) ||
+                          (e_sensor < 0.0f && t_pred <= target_temperature);
+  if (pred_past_target) {
+    u_p = 0.0f;
+  }
+
+  float b0_cmd = (e_sensor >= 0.0f) ? B0_HEAT : B0_COOL;
+  float u_unsat = (u_p + i_term - f_hat) / b0_cmd;
   float u = clampf(u_unsat, -1.0f, 1.0f);
 
-  // Back-calculation: do not remember an impossible duty during saturation.
-  i_term += DT_SEC * (KI * e_pred + (u - u_unsat) / TT_AW);
+  i_term += DT_SEC * (KI * e_sensor + (u - u_unsat) / TT_AW);
   i_term = clampf(i_term, -I_MAX, I_MAX);
+
+  float du = clampf(u - u_applied, -DU_MAX, DU_MAX);
+  u = u_applied + du;
 
   applySignedDuty(u);
   u_applied = u;
@@ -257,11 +266,13 @@ void runTemperatureControl() {
 void applySignedDuty(float u) {
   if (fabs(u) < 0.02f) {
     stopMotor();
+    last_pwm = 0;
     return;
   }
   int ticks = (int)(fabs(u) * (float)PWM_TOP + 0.5f);
   if (ticks < 1) {
     stopMotor();
+    last_pwm = 0;
     return;
   }
   if (ticks > PWM_TOP) {
@@ -273,9 +284,11 @@ void applySignedDuty(float u) {
   if (u > 0.0f) {
     OCR1A = ticks;
     OCR1B = 0;
+    last_pwm = ticks;
   } else {
     OCR1A = 0;
     OCR1B = ticks;
+    last_pwm = -ticks;
   }
 }
 
@@ -299,12 +312,13 @@ float measure_temp(int pin) {
   }
 
   float average_adc = total / NUM_SAMPLES;
+  last_adc = average_adc;
   if (average_adc < 1.0f || average_adc > 1022.0f) {
+    last_ohm = NAN;
     return NAN;
   }
-  // Same divider as Temperature_Chamber: NTC to GND, 10k to VCC.
-  // R = SERIES / (1023/ADC - 1). The inverted form maps 20 C to ~30 C.
   float resistance = SERIES_RESISTOR / (1023.0f / average_adc - 1.0f);
+  last_ohm = resistance;
   if (resistance <= 0.0f) {
     return NAN;
   }

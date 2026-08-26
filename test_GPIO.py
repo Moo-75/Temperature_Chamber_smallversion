@@ -28,8 +28,8 @@ def main():
         peltier.start_control()
         peltier.set_target_temperature(25.0)
         for i in range(8):
-            t = peltier.get_temperature()
-            print(f"[{i+1}/8] temp={t}")
+            ctrl = peltier.get_ctrl()
+            print(f"[{i+1}/8] {ctrl}")
             time.sleep(0.5)
         peltier.stop_control()
     finally:

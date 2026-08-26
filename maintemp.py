@@ -92,14 +92,35 @@ def peltier_worker(command_queue, result_queue, shared_data, dict_lock, stop_eve
                     peltier.close()
                     return
 
-            curr_temp = peltier.get_temperature()
+            ctrl = peltier.get_ctrl()
+            curr_temp = None if ctrl is None else ctrl["sensor_temp"]
             temps_valid = is_valid_temperature(curr_temp)
 
             with dict_lock:
                 shared_data["sensor_temp"] = curr_temp if temps_valid else None
                 shared_data["average_temp"] = curr_temp if temps_valid else None
-                shared_data["heat_duty"] = 0.0
-                shared_data["cool_duty"] = 0.0
+                if ctrl is None:
+                    shared_data["heat_duty"] = 0.0
+                    shared_data["cool_duty"] = 0.0
+                    shared_data["t_pred"] = None
+                    shared_data["rate"] = None
+                    shared_data["u"] = 0.0
+                    shared_data["f_hat"] = None
+                    shared_data["i_term"] = None
+                    shared_data["adc"] = None
+                    shared_data["ohm"] = None
+                    shared_data["pwm"] = 0
+                else:
+                    shared_data["heat_duty"] = ctrl["heat_duty"]
+                    shared_data["cool_duty"] = ctrl["cool_duty"]
+                    shared_data["t_pred"] = ctrl["t_pred"]
+                    shared_data["rate"] = ctrl["rate"]
+                    shared_data["u"] = ctrl["u"]
+                    shared_data["f_hat"] = ctrl["f_hat"]
+                    shared_data["i_term"] = ctrl["i_term"]
+                    shared_data["adc"] = ctrl["adc"]
+                    shared_data["ohm"] = ctrl["ohm"]
+                    shared_data["pwm"] = ctrl["pwm"]
 
             target_temperature = peltier.target_temp
             elapsed_since_prev = time.time() - prev_time
@@ -188,6 +209,14 @@ if __name__ == "__main__":
         "target_temp": 0.0,
         "heat_duty": 0.0,
         "cool_duty": 0.0,
+        "t_pred": 0.0,
+        "rate": 0.0,
+        "u": 0.0,
+        "f_hat": 0.0,
+        "i_term": 0.0,
+        "adc": 0.0,
+        "ohm": 0.0,
+        "pwm": 0,
         "initial_target_temp": initial_target_temp,
     })
     dict_lock = multiprocessing.Lock()

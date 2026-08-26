@@ -166,7 +166,43 @@ class Peltier_module:
                 return None
         return None
 
+    def get_ctrl(self):
+        """Arduino GET_CTRL: t,t_pred,rate,u,f_hat,i,target,adc,ohm,pwm."""
+        response = self.send_command("GET_CTRL", no_response=False)
+        if not response:
+            return None
+        try:
+            parts = [p.strip() for p in response.split(",") if p.strip() != ""]
+            if len(parts) < 10:
+                return None
+            vals = [float(p) for p in parts[:10]]
+            if not math.isfinite(vals[0]):
+                return None
+            u = vals[3]
+            pwm = vals[9]
+            self.heat_duty = max(0.0, u) * 100.0
+            self.cool_duty = max(0.0, -u) * 100.0
+            return {
+                "sensor_temp": vals[0],
+                "t_pred": vals[1],
+                "rate": vals[2],
+                "u": u,
+                "f_hat": vals[4],
+                "i_term": vals[5],
+                "target_temp": vals[6],
+                "adc": vals[7],
+                "ohm": vals[8],
+                "pwm": pwm,
+                "heat_duty": self.heat_duty,
+                "cool_duty": self.cool_duty,
+            }
+        except ValueError:
+            return None
+
     def get_temperature(self):
+        ctrl = self.get_ctrl()
+        if ctrl is not None:
+            return ctrl["sensor_temp"]
         response = self.send_command("GET_TEMP", no_response=False)
         if not response:
             return None

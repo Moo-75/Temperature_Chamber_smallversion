@@ -1,9 +1,29 @@
 import csv
 from datetime import datetime
 import os
+from pathlib import Path
 import sys
 import time
 import maze
+
+
+def get_default_save_dir(timestamp_str: str) -> tuple[Path, Path]:
+    """
+    migrate_to_server.py가 인식할 수 있도록 2단계 계층 구조를 생성합니다:
+    Desktop/TEMP_TEST (Parent) / test_YYYY-MM-DD_HH-MM-SS (Session) / Temperature_*.csv
+    """
+    home = Path.home()
+    desktop = home / "Desktop"
+    if desktop.is_dir():
+        base_dir = desktop
+    else:
+        base_dir = Path.cwd().parent
+
+    parent_dir = base_dir / "TEMP_TEST"
+    session_dir = parent_dir / f"test_{timestamp_str}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    csv_file = session_dir / f"Temperature_test_{timestamp_str}.csv"
+    return session_dir, csv_file
 
 
 def main():
@@ -11,10 +31,12 @@ def main():
     peltier = maze.Peltier_module(json_dir)
 
     timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    csv_filename = f"temp_test_{timestamp_str}.csv"
+    session_dir, csv_filepath = get_default_save_dir(timestamp_str)
 
     print("\n=== 단독 온도 제어 테스트 & CSV 로거 ===")
-    print(f"로그 저장 경로: {os.path.abspath(csv_filename)}")
+    print(f"세션 폴더 경로: {session_dir}")
+    print(f"CSV 저장 파일:  {csv_filepath}")
+    print("(migrate_to_server.py 실행 시 'TEMP_TEST' 폴더를 선택하면 서버로 전송됩니다.)\n")
 
     try:
         raw_target = input("목표 온도를 입력하세요 (°C) [25.0]: ").strip()
@@ -38,7 +60,7 @@ def main():
     print(f"{'Time(s)':>8} | {'Target':>6} | {'Sensor':>6} | {'T_pred':>6} | {'u(%)':>6} | {'PWM':>6} | {'ADC':>5} | {'Ohm':>7}")
     print("-" * 75)
 
-    with open(csv_filename, "w", newline="") as f:
+    with open(csv_filepath, "w", newline="") as f:
         wr = csv.writer(f)
         wr.writerow([
             "time(s)",
@@ -93,7 +115,7 @@ def main():
             peltier.close()
 
     print("-" * 75)
-    print(f"테스트 완료. CSV 파일이 저장되었습니다: {csv_filename}\n")
+    print(f"테스트 완료. CSV 파일이 저장되었습니다: {csv_filepath}\n")
 
 
 if __name__ == "__main__":

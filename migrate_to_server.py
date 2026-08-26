@@ -47,6 +47,9 @@ EXPERIMENT_PATTERNS = (
     "SensorTime_*.csv",
     "Video_*.mp4",
     "TD_*_trial-wise.csv",
+    "TD_*.csv",
+    "TD_*",
+    "temp_test_*.csv",
 )
 
 # Set in main() when sshpass-based passwordless auth is enabled.
@@ -141,6 +144,11 @@ def discover_parents(bases: list[Path], max_depth: int) -> list[dict]:
             try:
                 key = root_path.resolve()
             except OSError:
+                continue
+            # Do not allow root, home, or Desktop itself to be treated as a parent folder
+            # (which would transfer and attempt to delete the entire Desktop/Home).
+            home_resolved = Path.home().resolve()
+            if key in {Path("/"), home_resolved, home_resolved / "Desktop"}:
                 continue
             if key in parents:
                 continue
@@ -399,8 +407,18 @@ def main(argv: list[str] | None = None) -> int:
     parent = prompt_choice(parents)
     print(f"\nSending CONTENTS of {parent}")
     print(f"     -> {args.target}:{args.dest}  (port {args.port})")
-    transfer(args, parent)
-    print("Transfer complete.")
+    try:
+        transfer(args, parent)
+        print("Transfer complete.")
+    except subprocess.CalledProcessError as e:
+        print(f"\n[오류] 서버 전송 중 오류가 발생했습니다 (종료 코드 {e.returncode}).")
+        print("확인 사항:")
+        print(f"  1. SSH 대상 계정 및 IP: {args.target}")
+        print(f"  2. SSH 포트: {args.port}")
+        print(f"  3. 서버 저장 경로: {args.dest}")
+        print("  4. 서버 연결 상태 (VPN/내부망) 및 비밀번호 확인")
+        print(f"  예시: python3 migrate_to_server.py --target your_id@10.140.5.118 --port {args.port}")
+        return 1
 
     if not args.no_delete_prompt:
         maybe_delete(parent)

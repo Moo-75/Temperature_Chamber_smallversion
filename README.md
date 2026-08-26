@@ -1,16 +1,29 @@
-# Temperature_Chamber
-Purpose of this project is to make a program that can run temperature association learning (TAL) and temperature reversal learning (TRL)
+# Temperature_Chamber_smallversion
 
-Core of this project is to make the neuroom chamber working with Peltier modules
-1. Read and save floor temperature
-2. PID controller of temperature
-3. TAL and TRL
+Small temperature chamber for TL1 / TL2.
 
-============================
+- Raspberry Pi: poke, LED, TTL, task
+- Arduino: KY-013 temperature + one BTS7960 motor driver
+- No display, camera, or reward port
+
+## Setup
+
+```bash
 cd ~/Desktop
-git clone https://github.com/Moo-75/Neuroom_chamber.git
-cd Neuroom_chamber
-chmod +x setup_new_pi.sh
-chmod +x link_arduino.sh
+git clone https://github.com/Moo-75/Temperature_Chamber_smallversion.git
+cd Temperature_Chamber_smallversion
+chmod +x setup_new_pi.sh link_arduino.sh
 ./setup_new_pi.sh
-./link_arduino.sh
+sudo reboot
+```
+
+Then upload `peltier_operating_system.ino` to the Arduino, run `./link_arduino.sh`, and:
+
+```bash
+python3 test_GPIO.py
+python3 maintemp.py
+# json -> test.json
+# task -> TL1 or TL2
+```
+
+Wiring: `PLAN.md` / `SETUP.md`

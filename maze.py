@@ -1,492 +1,109 @@
 import json
-from typing import Set
 import math
-import pygame
-import os
-import RPi.GPIO as GPIO #general purpose Input/Output
 import time
-import random
+
+import RPi.GPIO as GPIO
 import serial
 
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 
-df = {'Trial':[], 'Position':[],'Length':[], 
-        'Width':[],'Thickness':[],'Color':[], 'Poked Site':[]}
 
-class NoneChoiceError(Exception):
-    pass
-class NoDataFrame(Exception):
-    pass
-
-class Display:
-    def __init__(self, dir):
-        # load file
-        with open (dir, "r") as config:
-            data = json.load(config)
-            self.screen = pygame.display.set_mode((data['display']['width'],data['display']['height']), pygame.NOFRAME)
-            self.screen.fill((0, 0, 0))
-            pygame.mouse.set_visible(False)
-
-        # 이미지 사전 로드 (json 파일 기준 디렉토리에서 절대경로로 로드)
-        img_dir = os.path.dirname(os.path.abspath(dir))
-        self._img_hot = pygame.transform.scale(
-            pygame.image.load(os.path.join(img_dir, 'Hot.png')), (200, 200))
-        self._img_cold = pygame.transform.scale(
-            pygame.image.load(os.path.join(img_dir, 'Cold.png')), (200, 200))
-        self._img_center = pygame.transform.scale(
-            pygame.image.load(os.path.join(img_dir, 'Center.png')), (200, 200))
-        self._cue_y_cache = {}
-
-    
-    def show(self, state = []):
-        if len(state) == 0:
-            self.screen.fill((0, 0, 0))
-            pygame.display.update()
-        else:
-            for i in state:
-                # if i =='l':
-                #     self.screen.blit(self.img, (35, 200))
-                # elif i =='r':
-                #     self.screen.blit(self.img, (575, 200))
-                # elif i =='m':
-                #     self.screen.blit(self.img, (305, 200))
-                if i =="w":
-                    self.screen.fill((255, 255, 255))
-                elif i =='g':
-                    self.screen.fill((128,128,128))
-                elif i == "dg":
-                    self.screen.fill((64,64,64))
-                # Outcome phase 전용 색상
-                elif i == "warm":  # 온도 상승 - 따뜻한 빨간 계열
-                    self.screen.fill((255, 100, 100))
-                elif i == "cool":  # 온도 하강 - 차가운 파란 계열
-                    self.screen.fill((100, 100, 255))
-            pygame.display.flip()
-
-    def draw_square(self, position, color, side, base=50):
-        # Width of one third of the screen
-        third_width = self.screen.get_width() // 3
-        
-        # Determine the x position based on the specified position
-        if position == 'left':
-            x = (third_width - side) // 2  # Center in the first third
-        elif position == 'center':
-            x = (self.screen.get_width() - side) // 2  # Center in the middle
-        else:  # 'right'
-            x = 2 * third_width + (third_width - side) // 2  # Center in the last third
-        
-        # Position the square 50 pixels above the bottom of the screen
-        y = self.screen.get_height() - side - base
-        
-        # Drawing the square
-        pygame.draw.rect(self.screen, color, (x, y, side, side))
-        
-        return pygame.Rect(x, y, side, side)  # Return the rect for updating
-
-    def draw_bar(self, length, position, width=150, thickness=None, color=(255, 255, 255), base= 450):
-        '''
-        This function draws a bar among left, middle, and right
-        with input length, width, and type
-
-        Args:
-            screen: screen instance after basic setting 
-            length(int, float): length of the bar
-            position(str): choose to write among "l", "m", and "r",
-                otherwise do not display anything
-            width(int, float): width of the bar, default is 30
-            thickness: thickness of the boundary of the bar.
-                default setting is None.
-            color(tuple, int): RGB color, default setting is white
-        '''
-        base = base
-        rect = None  # This will store the rectangle to update
-
-        if position == "l" and length != 0:
-            rect = pygame.Rect(135-width/2, base-length, width, length)
-        elif position == "m" and length != 0:
-            rect = pygame.Rect(400-width/2, base-length, width, length)
-        elif position == "r" and length != 0:
-            rect = pygame.Rect(665-width/2, base-length, width, length)
-
-        if rect is not None:
-            if thickness is None:
-                pygame.draw.rect(self.screen, color, rect)
-            else:
-                pygame.draw.rect(self.screen, color, rect, thickness)
-            pygame.display.update(rect)
-
-    def draw_rect(self, position, height=200, width=200,
-                thickness=None, color=(255, 255, 255), base = 320):
-        '''
-        This function draws a bar among left, middle, and right
-        with input length, width, and type
-
-        Args:
-            screen: screen instance after basic setting 
-            length(int, float): length of the bar
-            position(str): choose to write amoung "l", "m", and "r",
-                otherwise do not display anything
-            width(int, float): width of the bar, default is 30
-            thickness: thickness of the boundary of the bar.
-                default setting is None.
-            color(tuple, int): RGB color, default setting is white
-        '''
-        base = base #470
-        if thickness is None:
-            if position == "l" and height != 0:
-                pygame.draw.rect(self.screen, color,
-                            pygame.Rect(135-width/2, base-height, width, height))
-                
-            elif position == "m" and height != 0:
-                pygame.draw.rect(self.screen, color,
-                                pygame.Rect(400-width/2, base-height, width, height))
-                
-            elif position == "r" and height != 0:
-                pygame.draw.rect(self.screen, color,
-                                pygame.Rect(665-width/2, base-height, width, height))
-                
-            else:
-                pass
-        else:
-            if position == "l" and height != 0:
-                pygame.draw.rect(self.screen, color,
-                                pygame.Rect(150-width/2, base-height, width, height),
-                                thickness)
-                
-            elif position == "m" and height != 0:
-                pygame.draw.rect(self.screen, color,
-                                pygame.Rect(400-width/2, base-height, width, height),
-                                thickness)
-                
-            elif position == "r" and height != 0:
-                pygame.draw.rect(self.screen, color,
-                                pygame.Rect(650-width/2, base-height, width, height),
-                                thickness)
-                
-            else:
-                pass
-        pygame.display.flip()
-    
-    def wrong_screen(self, side=150, p = (400, 400)):
-        p1 = p
-        p2 = (p[0] - side/2, p[1] + side * 3**0.5 /2)
-        p3 = (p[0] + side/2, p[1] + side * 3**0.5 /2)
-
-        pygame.draw.polygon(self.screen, (255, 255, 0), [p1, p2, p3])
-        pygame.display.update()
-
-    
-
-
-    def display_bars(self, len_ls, width_ls, th_ls=[None, None, None],
-         c_ls=[(255, 255, 255), (255, 255, 255), (255, 255, 255)]):
-        '''
-        This function can display multiple bars with different setting.
-
-        Args:
-            N_trial: number of trial
-            len_ls: (list,3)list of length
-            width_ls: (list,3)list of width, default is 30
-            th_ls: (list,3)list of thickness, default is None
-            c_ls: (list,3)list of color code, default is (255, 255, 255)  
-
-        Return:
-            rows        
-        '''
-        
-        posit_code = ["l", "m", "r"]
-
-        for i in range(3):
-            self.draw_bar(len_ls[i], posit_code[i], width= width_ls[i],
-                thickness=th_ls[i], color=c_ls[i]) #self.screen을 맨 앞 인수로 추가하는 실수 동일하게 발생
-            # Add new element to the list of each value of df
-            
-        pygame.display.update()
-        
-    def _white_content_bottom(self, surface):
-        bottom = None
-        for y in range(surface.get_height()):
-            for x in range(surface.get_width()):
-                color = surface.get_at((x, y))
-                if color.a > 10 and color.r >= 240 and color.g >= 240 and color.b >= 240:
-                    bottom = y
-        return bottom if bottom is not None else surface.get_height() - 1
-
-    def _image_y_for_bottom_gap_fraction(self, surface, gap_fraction):
-        cache_key = (id(surface), gap_fraction)
-        if cache_key in self._cue_y_cache:
-            return self._cue_y_cache[cache_key]
-        screen_h = self.screen.get_height()
-        centered_y = (screen_h - surface.get_height()) // 2
-        content_bottom = self._white_content_bottom(surface)
-        current_gap = screen_h - (centered_y + content_bottom + 1)
-        target_gap = max(0, round(current_gap * gap_fraction))
-        image_y = screen_h - target_gap - (content_bottom + 1)
-        max_y = max(0, screen_h - surface.get_height())
-        image_y = max(0, min(image_y, max_y))
-        self._cue_y_cache[cache_key] = image_y
-        return image_y
-
-    def display_temp_cue(self, temp, bottom_gap_fraction=None):
-        # Calculate positions
-        third_width = 800 // 3
-        cold_x = (third_width - 200) // 2
-        hot_x = 2 * third_width + (third_width - 200) // 2
-
-        self.screen.fill((0, 0, 0))
-        if temp == "hot":
-            image_y = (
-                self._image_y_for_bottom_gap_fraction(self._img_hot, bottom_gap_fraction)
-                if bottom_gap_fraction is not None
-                else (480 - 200) // 2
-            )
-            self.screen.blit(self._img_hot, (hot_x, image_y))
-        elif temp == "cold":
-            image_y = (
-                self._image_y_for_bottom_gap_fraction(self._img_cold, bottom_gap_fraction)
-                if bottom_gap_fraction is not None
-                else (480 - 200) // 2
-            )
-            self.screen.blit(self._img_cold, (cold_x, image_y))
-        pygame.display.flip()
-
-    def display_temp_both(self):
-        # Calculate positions
-        third_width = 800 // 3
-        cold_x = (third_width - 200) // 2
-        hot_x = 2 * third_width + (third_width - 200) // 2
-        image_y = (480 - 200) // 2  # Vertically center
-
-        self.screen.fill((0, 0, 0))
-        self.screen.blit(self._img_hot, (hot_x, image_y))
-        self.screen.blit(self._img_cold, (cold_x, image_y))
-        pygame.display.flip()
-
-    def display_temp_cue_center(self, temp):
-        """Center(중앙 1/3 영역)에 hot 혹은 cold cue를 표시. New Protocol Stage 1용."""
-        # Center 1/3 영역 중앙: x = 800/2 - 100 = 300
-        center_x = (800 - 200) // 2  # 300
-        image_y = (480 - 200) // 2   # 140
-
-        self.screen.fill((0, 0, 0))  # 화면 클리어
-        if temp == "hot":
-            self.screen.blit(self._img_hot, (center_x, image_y))
-        elif temp == "cold":
-            self.screen.blit(self._img_cold, (center_x, image_y))
-        pygame.display.flip()
-
-    def display_start_cue_center(self):
-        center_x = (800 - 200) // 2
-        image_y = (480 - 200) // 2
-
-        self.screen.fill((0, 0, 0))
-        self.screen.blit(self._img_center, (center_x, image_y))
-        pygame.display.flip()
-
-    def erase_temp_cue(self, temp):
-         # Calculate positions (same as in display_temp_cue)
-        third_width = 800 // 3
-        cold_x = (third_width - 200) // 2
-        hot_x = 2 * third_width + (third_width - 200) // 2
-        image_y = (480 - 200) // 2
-
-        # Create a rectangle to cover the image
-        cover_rect = pygame.Rect(0, 0, 200, 200)
-
-        if temp == "hot":
-            cover_rect.topleft = (hot_x, image_y)
-        elif temp == "cold":
-            cover_rect.topleft = (cold_x, image_y)
-
-        # Fill the rectangle with the background color
-        # Assuming the background is white, change as needed
-        self.screen.fill((0, 0, 0), cover_rect)
-        
-        # Update the display
-        pygame.display.update(cover_rect)
-        
-            
-    
 class Sensor:
-    '''
-    This class assgins pin positions for inputs of changed value recognized by sensor and controls inputs.
-    We can use this class by storing the detected value in some variables and using it in other lines of code.
-    '''
     def __init__(self, dir):
-        with open (dir, "r") as config:
+        with open(dir, "r") as config:
             data = json.load(config)
-            self.reward = data["GPIO"]["nose_poke_reward"]
-            self.left = data["GPIO"]["nose_poke_left"]
-            self.center = data["GPIO"]["nose_poke_center"]
-            self.right = data["GPIO"]["nose_poke_right"]
-        GPIO.setup(self.reward, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
-        GPIO.setup(self.left, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
-        GPIO.setup(self.center, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
-        GPIO.setup(self.right, GPIO.IN, pull_up_down = GPIO.PUD_DOWN)
+            gpio = data["GPIO"]
+            poke_cfg = data.get("poke", {})
+            self.pin = gpio["nose_poke"]
+            self.on_level = poke_cfg.get("on", 1)
+        GPIO.setup(self.pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+    def poked(self):
+        return GPIO.input(self.pin) == self.on_level
+
     def get(self):
-        '''
-        This method returns detected value in reward port, and three poking hole: left, center, and right.
-        '''
-        return (GPIO.input(self.reward), GPIO.input(self.left), GPIO.input(self.center), GPIO.input(self.right))
-    
+        return 1 if self.poked() else 0
 
 
-
-        
-class Reward:
-    '''
-    This class assgins pin positions for outputs and controls outputs such as motor controling the mass of reward and LED.
-    '''
+class LED:
     def __init__(self, dir):
-        with open (dir, "r") as config:
-            self.data = json.load(config)
-            GPIO.setup (self.data["GPIO"]["reward_motor"], GPIO.OUT, initial = GPIO.LOW) 
-            GPIO.setup (self.data["GPIO"]["reward_led"], GPIO.OUT, initial = GPIO.LOW)
-            GPIO.setup (self.data["GPIO"]["wrong_led"], GPIO.OUT, initial = GPIO.LOW)
-    def give(self, duration):
-        '''
-        This method controls the amount of reward by operating the motor for 'duration' 
-        
-        Args:
-            duration
-        '''
-        RG_time = time.time()
-        GPIO.output(self.data["GPIO"]["reward_motor"], GPIO.HIGH)
-        while True: 
-            if time.time() - RG_time >= duration:
-                break
-        GPIO.output(self.data["GPIO"]["reward_motor"], GPIO.LOW)
-    def light(self, yes): 
-        '''
-        This method turns on LED when the boolean parameter is True.
+        with open(dir, "r") as config:
+            data = json.load(config)
+            self.pin = data["GPIO"]["led"]
+        GPIO.setup(self.pin, GPIO.OUT, initial=GPIO.LOW)
+        self._on = False
 
-        Args:
-            yes(Boolean)
-        '''
-        if yes == True: 
-            GPIO.output(self.data["GPIO"]["reward_led"], GPIO.HIGH)
-        else:
-            GPIO.output(self.data["GPIO"]["reward_led"], GPIO.LOW)
+    def on(self):
+        GPIO.output(self.pin, GPIO.HIGH)
+        self._on = True
 
-    def wrong(self, yes):
-        '''
-        This method turns on wrong LED when mouse choose wrong poking port
+    def off(self):
+        GPIO.output(self.pin, GPIO.LOW)
+        self._on = False
 
-        Args:
-            yes(Boolean)
-        '''
-        if yes == True: 
-            GPIO.output(self.data["GPIO"]["wrong_led"], GPIO.HIGH)
-        else:
-            GPIO.output(self.data["GPIO"]["wrong_led"], GPIO.LOW)
+    def is_on(self):
+        return self._on
 
-class Photometry:
+
+class TTL:
     def __init__(self, dir):
-        with open (dir, "r") as config:
-            self.data = json.load(config)
-            self.fp1 = self.data["GPIO"]["BNC1"]
-            self.fp2 = self.data["GPIO"]["BNC2"]
-            self.fp3 = self.data["GPIO"]["BNC3"]
-            self.fp4 = self.data["GPIO"]["BNC4"]
-        GPIO.setup(self.fp1, GPIO.OUT, initial=GPIO.LOW)
-        GPIO.setup(self.fp2, GPIO.OUT, initial=GPIO.LOW)
-        GPIO.setup(self.fp3, GPIO.OUT, initial=GPIO.LOW)
-        GPIO.setup(self.fp4, GPIO.OUT, initial=GPIO.LOW)
+        with open(dir, "r") as config:
+            data = json.load(config)
+            gpio = data["GPIO"]
+            self.out_pin = gpio["ttl_out"]
+            self.in_pin = gpio["ttl_in"]
+        GPIO.setup(self.out_pin, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(self.in_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
-    def FP1_on(self, on=False):
-        if on == False:
-            fp_time = round(time.time(), 3)
-            return fp_time
-        else:
-            GPIO.output(self.fp1, GPIO.HIGH)
-            fp_time = round(time.time(), 3)
-            return fp_time
-    
-    def FP1_off(self, on=False):
-        if on == False:
-            fp_time = round(time.time(), 3)
-            return fp_time
-        else:
-            GPIO.output(self.fp1, GPIO.LOW)
-            fp_time = round(time.time(), 3)
-            return fp_time
-    
-    def FP2_on(self, on=False):
-        if on == False:
-            fp_time = round(time.time(), 3)
-            return fp_time
-        else:
-            GPIO.output(self.fp2, GPIO.HIGH)
-            fp_time = round(time.time(), 3)
-            return fp_time
+    def out_high(self):
+        GPIO.output(self.out_pin, GPIO.HIGH)
 
-    def FP2_off(self, on=False):
-        if on == False:
-            fp_time = round(time.time(), 3)
-            return fp_time
-        else:
-            GPIO.output(self.fp2, GPIO.LOW)
-            fp_time = round(time.time(), 3)
-            return fp_time
-    
-    def FP3_on(self, on=False):
-        if on == False:
-            fp_time = round(time.time(), 3)
-            return fp_time
-        else:
-            GPIO.output(self.fp3, GPIO.HIGH)
-            fp_time = round(time.time(), 3)
-            return fp_time
+    def out_low(self):
+        GPIO.output(self.out_pin, GPIO.LOW)
 
-    def FP3_off(self, on=False):
-        if on == False:
-            fp_time = round(time.time(), 3)
-            return fp_time
-        else:
-            GPIO.output(self.fp3, GPIO.LOW)
-            fp_time = round(time.time(), 3)
-            return fp_time
-    
-    def FP4_on(self, on=False):
-        if on == False:
-            fp_time = round(time.time(), 3)
-            return fp_time
-        else:
-            GPIO.output(self.fp4, GPIO.HIGH)
-            fp_time = round(time.time(), 3)
-            return fp_time
-    
-    def FP4_off(self, on=False):
-        if on == False:
-            fp_time = round(time.time(), 3)
-            return fp_time
-        else:
-            GPIO.output(self.fp4, GPIO.LOW)
-            fp_time = round(time.time(), 3)
-            return fp_time
+    def pulse(self, duration_sec=0.01):
+        self.out_high()
+        time.sleep(duration_sec)
+        self.out_low()
+
+    def read_in(self):
+        return GPIO.input(self.in_pin)
+
 
 class Peltier_module:
-    # USB 재열거(re-enumerate)로 시리얼이 끊겼을 때 재연결 동작 파라미터
-    SERIAL_PORT = '/dev/arduino'
+    """Arduino USB serial: KY-013 read + BTS7960 PWM. Pi only sends commands."""
+
+    SERIAL_PORT = "/dev/arduino"
     SERIAL_BAUD = 115200
     SERIAL_TIMEOUT = 1
-    RECONNECT_DELAY_SEC = 1.0   # 닫은 뒤 udev가 /dev/arduino를 새 ttyACM에 다시 걸 시간
+    RECONNECT_DELAY_SEC = 1.0
 
-    def __init__(self):
+    def __init__(self, dir="test.json"):
         self.target_temp = 25.0
         self.attenuation = 0.0
+        self.att_min = 10.0
+        self.att_max = 45.0
         self._last_set_temp_cmd_monotonic = 0.0
         self.set_temp_min_interval_sec = 0.05
-        self._is_controlling = False  # START/STOP 상태 (재연결 시 복원용)
+        self._is_controlling = False
         self.ser = None
+        self.heat_duty = 0.0
+        self.cool_duty = 0.0
+
+        try:
+            with open(dir, "r") as config:
+                data = json.load(config)
+                arduino = data.get("arduino", {})
+                self.SERIAL_PORT = arduino.get("port", self.SERIAL_PORT)
+                self.SERIAL_BAUD = int(arduino.get("baudrate", self.SERIAL_BAUD))
+        except (OSError, json.JSONDecodeError):
+            pass
 
         self._open_serial_port()
         self._wait_for_ready()
 
     def _open_serial_port(self):
-        """/dev/arduino 시리얼 포트를 연다. dtr/rts=False로 열어 연결 시
-        아두이노 자동 리셋을 막는다(기존 동작 유지)."""
         ser = serial.Serial()
         ser.port = self.SERIAL_PORT
         ser.baudrate = self.SERIAL_BAUD
@@ -497,34 +114,22 @@ class Peltier_module:
         self.ser = ser
 
     def _wait_for_ready(self):
-        """아두이노 부팅/리셋 후 'Ready' 배너를 기다린다."""
-        pygame.time.wait(2000)  # 아두이노 기다리기
-        initial_message = self.ser.readline().decode('utf-8', errors='replace').strip()
+        time.sleep(2.0)
+        initial_message = self.ser.readline().decode("utf-8", errors="replace").strip()
         print(f"Arduino says: {initial_message}")
         if "Ready" not in initial_message:
             print("Warning: Arduino might not be ready.")
 
     def _write_line(self, command):
-        """개행 포함 한 줄 전송(저수준). 재연결 로직에서 재귀 방지용으로 직접 사용."""
-        self.ser.write(f"{command}\n".encode('utf-8'))
+        self.ser.write(f"{command}\n".encode("utf-8"))
 
     def reconnect(self):
-        """USB 재열거 등으로 끊긴 시리얼을 닫고 /dev/arduino를 다시 연다.
-
-        아두이노는 재열거 시 물리적으로 리셋되어 펌웨어 setup()에서
-        target_temperature=25.0 / is_running=true 로 돌아간다. 따라서 Ready 대기 후
-        제어 상태(START)와 현재 목표 온도(SET_TEMP)를 복원해야 실험 중 설정값이
-        조용히 25°C로 되돌아가는 것을 막을 수 있다.
-
-        성공 시 True, 실패(장치가 아직 안 올라옴) 시 False.
-        """
         try:
             if self.ser is not None:
                 self.ser.close()
         except Exception:
             pass
-        # udev가 /dev/arduino 심볼릭 링크를 새 ttyACM 노드에 다시 걸 시간을 준다.
-        pygame.time.wait(int(self.RECONNECT_DELAY_SEC * 1000))
+        time.sleep(self.RECONNECT_DELAY_SEC)
         try:
             self._open_serial_port()
             self._wait_for_ready()
@@ -537,123 +142,106 @@ class Peltier_module:
         print(f"[Peltier] serial reconnected; restored target={self.target_temp} C")
         return True
 
-    def send_command(self, command, no_response = True):
-        """명령을 보내고 아두이노의 첫 번째 응답 라인을 읽어 반환합니다.
-
-        시리얼 I/O 오류(EIO 등, USB 재열거로 fd가 죽은 경우) 발생 시
-        1회 재연결을 시도하고 성공하면 한 번 더 재시도한다. 재연결까지 실패하면
-        None을 반환하여 상위 루프가 다음 주기에 다시 시도하도록 한다."""
+    def send_command(self, command, no_response=True):
         for attempt in range(2):
             try:
                 self._write_line(command)
-
                 if no_response:
+                    try:
+                        self.ser.reset_input_buffer()
+                    except Exception:
+                        pass
                     return None
-
                 timeout_start = time.time()
                 while self.ser.in_waiting == 0:
                     if time.time() - timeout_start > 2.0:
                         print(f"Warning: Arduino response timeout for command: {command}")
                         return None
-                    pygame.time.wait(50)
-
-                return self.ser.readline().decode('utf-8', errors='replace').strip()
+                    time.sleep(0.05)
+                return self.ser.readline().decode("utf-8", errors="replace").strip()
             except (OSError, serial.SerialException) as e:
                 print(f"[Peltier] serial I/O error on '{command}': {e}")
                 if attempt == 0 and self.reconnect():
-                    continue  # 재연결 성공 → 한 번 더 시도
+                    continue
                 return None
         return None
 
+    def get_temperature(self):
+        response = self.send_command("GET_TEMP", no_response=False)
+        if not response:
+            return None
+        try:
+            parts = [float(x) for x in response.split(",") if x.strip()]
+            temps = [t for t in parts if math.isfinite(t)]
+            if not temps:
+                return None
+            return sum(temps) / len(temps)
+        except ValueError:
+            return None
+
     def get_temperatures(self):
-        """현재 온도 값 (센서1, 센서2)를 튜플로 반환합니다."""
-        response = self.send_command("GET_TEMP", no_response= False)
-        if response:
-            try:
-                temp1, temp2 = map(float, response.split(','))
-                if not (math.isfinite(temp1) and math.isfinite(temp2)):
-                    return None, None
-                return temp1, temp2
-            except (ValueError, IndexError):
-                return None, None
-        return None, None
+        temp = self.get_temperature()
+        return temp, temp
 
     def temperature_seton(self, temp, tolerance=0.5, timeout_sec=295, shared_data=None, dict_lock=None):
-        """목표 도달까지 대기. shared_data/dict_lock를 넘기면 이 구간에서도
-        multiprocessing 공유 dict가 갱신되어(워커 메인 루프가 멈춰 있어도)
-        로그·UI의 target/센서 값이 아두이노 실제 목표와 어긋나지 않게 한다."""
-        def _sync_shared(t1, t2, curr):
+        def _sync_shared(curr):
             if shared_data is None or dict_lock is None:
                 return
             with dict_lock:
-                if t1 is not None and t2 is not None and curr is not None:
-                    shared_data['temp1'] = t1
-                    shared_data['temp2'] = t2
-                    shared_data['average_temp'] = curr
-                shared_data['target_temp'] = self.target_temp
+                if curr is not None:
+                    shared_data["sensor_temp"] = curr
+                    shared_data["average_temp"] = curr
+                shared_data["target_temp"] = self.target_temp
 
         temp = self.set_target_temperature(temp=temp)
-        if shared_data is not None and dict_lock is not None:
-            with dict_lock:
-                shared_data['target_temp'] = self.target_temp
+        self.start_control()
         print("waiting for temperature set on ...")
         deadline = time.time() + timeout_sec
+        curr_temp = None
         while True:
-            temp1, temp2 = self.get_temperatures()
-            if temp1 is None or temp2 is None:
-                if time.time() >= deadline:
-                    print(f"temperature set on timeout at target {temp} C")
-                    return False
-                pygame.time.wait(200)
-                continue
-            curr_temp = (temp1 + temp2) / 2.0
-            _sync_shared(temp1, temp2, curr_temp)
-            if curr_temp is not None \
-                and curr_temp >= temp - tolerance and curr_temp <= temp + tolerance:
+            curr_temp = self.get_temperature()
+            _sync_shared(curr_temp)
+            if curr_temp is not None and abs(curr_temp - temp) <= tolerance:
                 break
             if time.time() >= deadline:
                 print(f"temperature set on timeout at target {temp} C (current: {curr_temp} C)")
                 return False
-            print(curr_temp,"/", temp1,"/", temp2)
-            pygame.time.wait(200)
-
+            print(curr_temp, "/", temp)
+            time.sleep(0.2)
         print(f"temperature set on {curr_temp} C")
         return True
 
     def set_target_temperature(self, temp):
-        """목표 온도를 설정합니다."""
         temp = float(temp)
-        if abs(temp - self.target_temp) <= 1e-4:
-            return temp
         now = time.time()
         elapsed = now - self._last_set_temp_cmd_monotonic
         if elapsed < self.set_temp_min_interval_sec:
-            pygame.time.wait(max(1, int((self.set_temp_min_interval_sec - elapsed) * 1000)))
+            time.sleep(max(0.001, self.set_temp_min_interval_sec - elapsed))
         self.send_command(f"SET_TEMP,{temp}")
         self.target_temp = temp
         self._last_set_temp_cmd_monotonic = time.time()
         return temp
 
     def set_temperature_attenuation(self, attenuation):
-        """초당 감쇠 온도 설정"""
         self.attenuation = attenuation
 
     def temp_updown(self, temp_updown):
-        new_temp = self.target_temp + temp_updown
-        self.set_target_temperature(new_temp)
+        self.set_target_temperature(self.target_temp + temp_updown)
 
     def start_control(self):
-        """아두이노의 자동 온도 제어를 시작합니다."""
         self._is_controlling = True
         self.send_command("START")
+        self.send_command(f"SET_TEMP,{self.target_temp}")
 
     def stop_control(self):
-        """아두이노의 자동 온도 제어를 중지합니다."""
         self._is_controlling = False
         self.send_command("STOP")
 
     def close(self):
-        """시리얼 연결을 닫습니다."""
+        try:
+            self.stop_control()
+        except Exception:
+            pass
         try:
             if self.ser is not None:
                 self.ser.close()
@@ -661,58 +249,60 @@ class Peltier_module:
             pass
         print("Serial connection closed.")
 
-if __name__ == '__main__':
-    a = 'abc.json'
-    while (1):
-        b = int(input("Enter number you want to test\n[0] Display [1] Reward [2] Sensor [3] Exit\n"))
-        if (b == 0):
-            instance = Display(a)
-            while (1):
-                c = input("Enter screen location. To end enter 'e'\n").split(" ")
-                if 'e' in c:
+
+if __name__ == "__main__":
+    json_dir = input("json file [test.json]: ").strip() or "test.json"
+    while True:
+        b = input(
+            "Enter number you want to test\n"
+            "[0] LED  [1] Sensor  [2] TTL  [3] Temperature  [4] Exit\n"
+        ).strip()
+        if b == "0":
+            led = LED(json_dir)
+            while True:
+                on = input("LED 1=on 0=off e=exit: ").strip()
+                if on == "1":
+                    led.on()
+                elif on == "0":
+                    led.off()
+                elif on == "e":
+                    led.off()
                     break
-                if c == ['']: # this part is just for test
-                    instance.show()
-                instance.show(c)
-        elif b == 1:
-            instance = Reward(a)
-            while (1):
-                c = input("Enter number you want to test\n[0] reward led [1] reward port [2] exit \n")
-                if c == "0":
-                    while (1):
-                        on = input("If you want to turn on led enter '1', to turn off enter '0', to exit enter 'e'")
-                        if on == "0":
-                            instance.light(False)
-                        elif on == "1":
-                            instance.light(True)
-                        elif on == 'e':
-                            break
-                        else:
-                            print("wrong input, please try again\n")
-                elif c == "1":
-                    while (1):
-                        duration = input("Enter reward duration you want to give. To end Enter 'e'")
-                        if duration == 'e':
-                            break
-                        instance.give(float(duration))
-                        print(str(duration) + "s given")
+        elif b == "1":
+            sensor = Sensor(json_dir)
+            while True:
+                c = input("1=read  2=exit: ").strip()
+                if c == "1":
+                    print("poke=", sensor.get())
                 elif c == "2":
                     break
-                else:
-                    print("Wrong input. Please try again\n")
-        elif b == 2:
-            instance = Sensor(a)
-            while (1):
-                c = input("If you want to get data, enter '1'. To exit enter '2'")
-                if c == "1":
-                    print(instance.get())
-                elif c == '2':
+        elif b == "2":
+            ttl = TTL(json_dir)
+            while True:
+                c = input("h=out high  l=out low  p=pulse  r=read in  e=exit: ").strip()
+                if c == "h":
+                    ttl.out_high()
+                elif c == "l":
+                    ttl.out_low()
+                elif c == "p":
+                    ttl.pulse(0.05)
+                elif c == "r":
+                    print("ttl_in=", ttl.read_in())
+                elif c == "e":
+                    ttl.out_low()
                     break
-                else:
-                    print("wrong input please try again\n")
-        elif b == 3:
+        elif b == "3":
+            peltier = Peltier_module(json_dir)
+            try:
+                peltier.start_control()
+                for i in range(10):
+                    t = peltier.get_temperature()
+                    print(f"[{i+1}/10] {t}")
+                    time.sleep(0.5)
+                peltier.stop_control()
+            finally:
+                peltier.close()
+        elif b == "4":
             break
         else:
             print("Wrong input")
-
-

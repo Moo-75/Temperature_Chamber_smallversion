@@ -1,157 +1,21 @@
 {
   "min": 60,
-  "min_p1": 5,
-  "trial": {
-    "p1": 30,
-    "p2": 5,
-    "p3": 40
-  },
-  "ITI": {
-    "p1": 5,
-    "p2": 1
-  },
-  "magazine_time": 10,
-  "delay": [
-    0,
-    4,
-    12,
-    20,
-    28
-  ],
-  "probability": [
-    1,
-    0.75,
-    0.5,
-    0.25,
-    0.125
-  ],
-  "delay_mid_point": [
-    10,
-    20,
-    30,
-    40,
-    50
-  ],
-  "probability_mid_point": [
-    15,
-    30,
-    45,
-    60
-  ],
-  "illumination_loc": [
-    "left",
-    "center",
-    "right"
-  ],
-  "reward": true,
-  "video": true,
-  "mode": [
-    "train",
-    "test"
-  ],
-  "reward_duration": {
-    "small(5ul)": 0.0368,
-    "more_than_small(10ul)": 0.0559,
-    "normal(15ul)": 0.0751,
-    "more_than_normal(20ul)": 0.0942,
-    "large(25ul)": 0.113,
-    "more_than_large(30ul)": 0.133,
-    "initiation": 0.02
-  },
   "GPIO": {
-    "nose_poke_reward": 4,
-    "reward_motor": 17,
-    "reward_led": 18,
-    "nose_poke_left": 20,
-    "nose_poke_center": 26,
-    "nose_poke_right": 19,
-    "wrong_led": 27,
-    "ttl_in": 10,
-    "ttl_out": 22,
-    "LOW_1": 9,
-    "LOW_2": 10,
-    "LOW_3": 11,
-    "BNC1": 5,
-    "BNC2": 6,
-    "BNC3": 23,
-    "BNC4": 24
+    "nose_poke": 17,
+    "led": 27,
+    "ttl_out": 23,
+    "ttl_in": 24
   },
-  "display": {
-    "width": 800,
-    "height": 480
+  "arduino": {
+    "port": "/dev/arduino",
+    "baudrate": 115200
   },
   "poke": {
-    "repeat_limit": 2,
-    "limit": 0.01,
     "on": 1,
     "off": 0
   },
-  "large": [
-    "left"
-  ],
   "directory": {
     "result": "../result",
-    "TrialData": "../TrialData",
-    "hot": "./Hot.png",
-    "cold": "./Cold.png"
-  },
-  "timestamp": 5,
-  "poa_task_vars": {
-    "baseline1_duration": 10,
-    "baseline1_temperature": 24,
-    "moulation1_duration": 90,
-    "moulation1_temperature": 24,
-    "baseline2_duration": 20,
-    "baseline2_temperature": 24,
-    "moulation2_duration": 1,
-    "moulation2_temperature": 24,
-    "baseline3_duration": 1,
-    "baseline3_temperature": 24
-  },
-  "PID": {
-    "Kp": 35.0,
-    "Ki": 0.1,
-    "Kd": 25.0
-  },
-  "peltier_control": {
-    "delay_sec": 6.0,
-    "rate_window_sec": 2.0,
-    "deadband_c": 0.5,
-    "large_step_threshold_c": 1.0,
-    "reverse_coast_ms": 400,
-    "min_valid_rate_c_per_s": 0.018,
-    "learn_up_pwm": 100,
-    "learn_down_pwm": 100,
-    "ref_min_pwm": 1200,
-    "ref_max_pwm": 3100,
-    "cache_sync_sec": 10,
-    "bin_min_c": 10,
-    "bin_max_c": 40,
-    "bin_step_c": 1,
-    "kp": 50.0,
-    "ki": 5.0,
-    "land_threshold_c": 2.0
-  },
-  "peltier_calibration": {
-    "approach_margin_c": 4.0,
-    "learn_hold_sec": 90.0,
-    "temp_points": [15, 20, 25, 30, 35, 40]
-  },
-  "TS_params": {
-    "Stage1": {
-      "task_time": 30,
-      "choice_window": 30,
-      "temp_hold_time": 10
-    },
-    "Stage2": {
-      "task_time": 30,
-      "choice_window": 30,
-      "temp_hold_time": 10
-    },
-    "Stage3": {
-      "task_time": 60,
-      "choice_window": 30,
-      "temp_hold_time": 10
-    }
+    "TrialData": "../TrialData"
   }
 }

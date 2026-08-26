@@ -187,6 +187,7 @@ class Peltier_module:
                 "t_pred": vals[1],
                 "rate": vals[2],
                 "u": u,
+                "d_term": vals[4],
                 "f_hat": vals[4],
                 "i_term": vals[5],
                 "target_temp": vals[6],

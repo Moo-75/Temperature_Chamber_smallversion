@@ -16,27 +16,23 @@ const int PWM_TOP = 3124;
 const float DT_SEC = 0.10f;
 const unsigned long interval = 100;
 
-// Used only to brake a fast approach. Hold / integral always use the sensor.
-const float TAU_SEC = 3.5f;
-const float MIN_RATE_C_PER_S = 0.08f;
+// Filter and spike rejection for rate of change (dT/dt)
 const float SPIKE_C = 1.2f;
-const float RATE_TAU_SEC = 1.5f;
+const float RATE_TAU_SEC = 1.2f;
 
-const float B0_HEAT = 0.40f;
-const float B0_COOL = 0.28f;
-
-const float OBS_L_FAST = 1.6f;
-const float OBS_L_SLOW = 0.35f;
-const float OBS_F_MAX = 1.8f;
-
-// P on sensor error. Milder than before so hold does not bang heat/cool.
-const float KP = 0.28f;
-const float KI = 0.035f;
+// Robust PID with Derivative on Measurement (Damping)
+// 1) KP = 0.22: 1°C error gives ~22% duty, >4.5°C gives 100% full saturation for fast jumps.
+// 2) KD = 1.60: Strong damping against velocity. When moving fast toward target,
+//    -KD * (dT/dt) naturally decelerates the Peltier output to prevent overshoot.
+// 3) KI = 0.012: Gentle integral to remove steady-state error without inducing windup.
+const float KP = 0.22f;
+const float KD = 1.60f;
+const float KI = 0.012f;
+const float I_MAX = 0.60f;
 const float TT_AW = 0.8f;
-const float I_MAX = 0.85f;
 
-// Max |du| per 100 ms. 0->100% takes ~1.2 s instead of one sample.
-const float DU_MAX = 0.12f;
+// Slew rate limit: output change cannot exceed ±8% per 100ms cycle (~1.25s for 0->100%).
+const float DU_MAX = 0.08f;
 
 float target_temperature = 25.0f;
 bool is_running = true;
@@ -46,13 +42,13 @@ unsigned long previousMillis = 0;
 bool have_prev_temp = false;
 float prev_temp = 0.0f;
 float rate_c_per_s = 0.0f;
-float f_hat = 0.0f;
 float i_term = 0.0f;
 float u_applied = 0.0f;
 
 float last_t = NAN;
 float last_t_pred = NAN;
 float last_u = 0.0f;
+float last_d_term = 0.0f;
 float last_adc = NAN;
 float last_ohm = NAN;
 int last_pwm = 0;
@@ -64,7 +60,6 @@ void applySignedDuty(float u);
 void stopMotor();
 float measure_temp(int pin);
 float clampf(float x, float lo, float hi);
-float b0_for_u(float u);
 
 void setup() {
   Serial.begin(115200);
@@ -125,7 +120,7 @@ void handleSerialCommands() {
     } else if (command.equals("GET_TARGET")) {
       Serial.println(target_temperature, 4);
     } else if (command.equals("GET_CTRL")) {
-      // t,t_pred,rate,u,f_hat,i,target,adc,ohm,pwm
+      // t,t_pred,rate,u,d_term,i_term,target,adc,ohm,pwm
       Serial.print(last_t, 3);
       Serial.print(',');
       Serial.print(last_t_pred, 3);
@@ -134,7 +129,7 @@ void handleSerialCommands() {
       Serial.print(',');
       Serial.print(last_u, 3);
       Serial.print(',');
-      Serial.print(f_hat, 4);
+      Serial.print(last_d_term, 4);
       Serial.print(',');
       Serial.print(i_term, 3);
       Serial.print(',');
@@ -181,17 +176,9 @@ bool readFloatArgument(String command, float &value) {
 }
 
 float clampf(float x, float lo, float hi) {
-  if (x < lo) {
-    return lo;
-  }
-  if (x > hi) {
-    return hi;
-  }
+  if (x < lo) return lo;
+  if (x > hi) return hi;
   return x;
-}
-
-float b0_for_u(float u) {
-  return (u >= 0.0f) ? B0_HEAT : B0_COOL;
 }
 
 void runTemperatureControl() {
@@ -206,14 +193,13 @@ void runTemperatureControl() {
     return;
   }
 
-  bool spike = false;
+  // 1) Filter temperature rate of change (dT/dt)
   if (!have_prev_temp) {
     prev_temp = curr;
     have_prev_temp = true;
   } else {
     float dT = curr - prev_temp;
     if (fabs(dT) > SPIKE_C) {
-      spike = true;
       prev_temp = curr;
     } else {
       float rate_raw = dT / DT_SEC;
@@ -223,38 +209,23 @@ void runTemperatureControl() {
     }
   }
 
-  float rate_for_pred = rate_c_per_s;
-  if (fabs(rate_for_pred) < MIN_RATE_C_PER_S) {
-    rate_for_pred = 0.0f;
-  }
-  float t_pred = curr + TAU_SEC * rate_for_pred;
-  last_t_pred = t_pred;
+  last_t_pred = curr + 3.0f * rate_c_per_s;
 
-  if (!spike) {
-    float b0_app = b0_for_u(u_applied);
-    float residual = rate_c_per_s - b0_app * u_applied - f_hat;
-    float obs_l = (fabs(u_applied) > 0.70f) ? OBS_L_FAST : OBS_L_SLOW;
-    f_hat += DT_SEC * obs_l * residual;
-    f_hat = clampf(f_hat, -OBS_F_MAX, OBS_F_MAX);
-  }
+  // 2) Standard PID with Derivative on Measurement (Damping)
+  // Error: positive = too cold (needs heating), negative = too hot (needs cooling)
+  float error = target_temperature - curr;
+  float p_term = KP * error;
+  float d_term = -KD * rate_c_per_s;
+  last_d_term = d_term;
 
-  // Regulate the sensor to target. T_pred only cancels P once the lag
-  // has already reached the setpoint, so hold cannot stall 2-3 C early.
-  float e_sensor = target_temperature - curr;
-  float u_p = KP * e_sensor;
-  bool pred_past_target = (e_sensor > 0.0f && t_pred >= target_temperature) ||
-                          (e_sensor < 0.0f && t_pred <= target_temperature);
-  if (pred_past_target) {
-    u_p = 0.0f;
-  }
-
-  float b0_cmd = (e_sensor >= 0.0f) ? B0_HEAT : B0_COOL;
-  float u_unsat = (u_p + i_term - f_hat) / b0_cmd;
+  float u_unsat = p_term + d_term + i_term;
   float u = clampf(u_unsat, -1.0f, 1.0f);
 
-  i_term += DT_SEC * (KI * e_sensor + (u - u_unsat) / TT_AW);
+  // 3) Anti-windup back-calculation for integral term
+  i_term += DT_SEC * (KI * error + (u - u_unsat) / TT_AW);
   i_term = clampf(i_term, -I_MAX, I_MAX);
 
+  // 4) Rate limiter on final duty cycle
   float du = clampf(u - u_applied, -DU_MAX, DU_MAX);
   u = u_applied + du;
 
@@ -280,7 +251,7 @@ void applySignedDuty(float u) {
   }
   digitalWrite(R_EN, HIGH);
   digitalWrite(L_EN, HIGH);
-  // Existing B+/B- wiring heats on RPWM (D9/OCR1A) and cools on LPWM (D10/OCR1B).
+  // D9 (OCR1A) is Heating, D10 (OCR1B) is Cooling
   if (u > 0.0f) {
     OCR1A = ticks;
     OCR1B = 0;

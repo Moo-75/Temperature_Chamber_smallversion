@@ -170,7 +170,7 @@ class Task:
     ):
         """
         TL shared core. Single poke, trial-based.
-        LED on/off is available via self.led but is not driven here yet.
+        LED is ON during choice_window and OFF during feedback_window / ITI.
         """
         file_name_td = self.file_trialdata + "_trial-wise.csv"
         directory = os.path.dirname(file_name_td)
@@ -298,6 +298,7 @@ class Task:
             self.TrialData2CSV2(directory, file_name_td, dt_row, col_name_td)
 
             cw_start = time.time()
+            self.led.on()
             prev_poke = self.sensor.poked()
             choice = False
             poke_t = None
@@ -316,6 +317,8 @@ class Task:
                     break
                 prev_poke = poked
                 time.sleep(SENSOR_POLL_WAIT_SEC)
+
+            self.led.off()
 
             if choice:
                 curr_temp, target_temp = self._get_shared_temperatures()

@@ -6,6 +6,7 @@ def main():
     json_dir = input("json file [test.json]: ").strip() or "test.json"
     print("=== LED ===")
     led = maze.LED(json_dir)
+    print(f"LED default brightness: {led.default_brightness}%")
     led.on()
     time.sleep(0.5)
     led.off()

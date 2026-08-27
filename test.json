@@ -3,6 +3,7 @@
   "GPIO": {
     "nose_poke": 17,
     "led": 27,
+    "led_brightness": 30,
     "ttl_out": 23,
     "ttl_in": 24
   },

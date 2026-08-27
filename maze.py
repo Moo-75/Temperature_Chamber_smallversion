@@ -27,20 +27,34 @@ class Sensor:
 
 
 class LED:
-    def __init__(self, dir):
+    def __init__(self, dir="test.json"):
         with open(dir, "r") as config:
             data = json.load(config)
-            self.pin = data["GPIO"]["led"]
+            gpio = data.get("GPIO", {})
+            self.pin = gpio.get("led", 27)
+            self.default_brightness = float(gpio.get("led_brightness", 100.0))
         GPIO.setup(self.pin, GPIO.OUT, initial=GPIO.LOW)
+        self.pwm = GPIO.PWM(self.pin, 500)  # 500 Hz (flicker-free software PWM)
+        self.pwm.start(0.0)
+        self._brightness = self.default_brightness
         self._on = False
 
-    def on(self):
-        GPIO.output(self.pin, GPIO.HIGH)
-        self._on = True
+    def on(self, brightness=None):
+        if brightness is not None:
+            self._brightness = max(0.0, min(float(brightness), 100.0))
+        else:
+            self._brightness = self.default_brightness
+        self.pwm.ChangeDutyCycle(self._brightness)
+        self._on = (self._brightness > 0.0)
 
     def off(self):
-        GPIO.output(self.pin, GPIO.LOW)
+        self.pwm.ChangeDutyCycle(0.0)
         self._on = False
+
+    def set_brightness(self, brightness):
+        self.default_brightness = max(0.0, min(float(brightness), 100.0))
+        if self._on:
+            self.on(self.default_brightness)
 
     def is_on(self):
         return self._on
@@ -296,8 +310,9 @@ if __name__ == "__main__":
         ).strip()
         if b == "0":
             led = LED(json_dir)
+            print(f"Current default brightness: {led.default_brightness}%")
             while True:
-                on = input("LED 1=on 0=off e=exit: ").strip()
+                on = input("LED 1=on 0=off [0-100]=brightness e=exit: ").strip()
                 if on == "1":
                     led.on()
                 elif on == "0":
@@ -305,6 +320,13 @@ if __name__ == "__main__":
                 elif on == "e":
                     led.off()
                     break
+                else:
+                    try:
+                        val = float(on)
+                        led.on(val)
+                        print(f"LED brightness set to {val}%")
+                    except ValueError:
+                        pass
         elif b == "1":
             sensor = Sensor(json_dir)
             while True:

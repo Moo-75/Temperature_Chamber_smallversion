@@ -11,7 +11,6 @@ import maze
 
 SENSOR_POLL_WAIT_MS = 50
 SENSOR_POLL_WAIT_SEC = SENSOR_POLL_WAIT_MS / 1000.0
-TTL_PULSE_SEC = 0.05
 TL_COL_NAME = [
     "mouseID",
     "Day",
@@ -86,15 +85,15 @@ class Task:
         )
         temp_status_proc.start()
         try:
-            ttl_t = self._ttl_sync_pulse()
-            print(f"[TTL] start pulse t={ttl_t:.3f}s")
+            ttl_t = self._ttl_session_high()
+            print(f"[TTL] HIGH t={ttl_t:.3f}s (session start)")
             self._log_ttl_event("TTLStart", ttl_t)
             self.task()
         except Exception as e:
             print(f"[Task Error] {e}")
         finally:
-            ttl_t = self._ttl_sync_pulse()
-            print(f"[TTL] end pulse t={ttl_t:.3f}s")
+            ttl_t = self._ttl_session_low()
+            print(f"[TTL] LOW t={ttl_t:.3f}s (session end)")
             self._log_ttl_event("TTLEnd", ttl_t)
             status_stop.set()
             temp_status_proc.join(timeout=2.0)
@@ -102,7 +101,6 @@ class Task:
             sys.stdout.flush()
             print("done")
             self.led.off()
-            self.ttl.out_low()
 
     def _sanitize_temperature(self, value):
         if value is None:
@@ -119,9 +117,14 @@ class Task:
             target_temp = self.shared_data["target_temp"]
         return self._sanitize_temperature(curr_temp), self._sanitize_temperature(target_temp)
 
-    def _ttl_sync_pulse(self):
+    def _ttl_session_high(self):
         t = time.time() - self.start_time
-        self.ttl.pulse(TTL_PULSE_SEC)
+        self.ttl.out_high()
+        return t
+
+    def _ttl_session_low(self):
+        t = time.time() - self.start_time
+        self.ttl.out_low()
         return t
 
     def _log_ttl_event(self, event, t):

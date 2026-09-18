@@ -15,6 +15,7 @@ Stop maintemp.py first.
 
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 
@@ -90,7 +91,34 @@ def classify_is(adc):
     return "fault", "BTS7960 고장 플래그 (12V 없음/과온/단락 가능)"
 
 
+def hold_output(ser, seconds, duty):
+    print(f"\nFORCE_PWM {duty:+.2f} 를 {seconds:.0f}초 유지합니다.")
+    print("  합선하지 마세요. 멀티미터로만 재세요.")
+    print("  1) IBT-2 나사단자 B+ 와 B- 사이  → 약 12 V 여야 함 (FORCE와 무관)")
+    print("  2) 굵은 출력선 M+ 와 M- 사이      → 가열이면 약 12 V, 꺼지면 0 V")
+    print("  얇은 8핀 로직 선을 재면 안 됩니다.")
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        cmd(ser, f"FORCE_PWM,{duty:.2f}", expect_reply=False)
+        drive = parse_drive(cmd(ser, "GET_DRIVE"))
+        left = max(0.0, deadline - time.time())
+        print(f"  남은 {left:4.1f}s  {fmt_drive(drive)}")
+        time.sleep(min(2.5, left) if left > 0 else 0)
+    cmd(ser, "STOP", expect_reply=False)
+    print("  STOP. 이제 M+/M- 는 다시 0 V 여야 합니다.")
+
+
 def main():
+    parser = argparse.ArgumentParser(description="BTS7960 wiring / driver probe")
+    parser.add_argument(
+        "--hold",
+        type=float,
+        default=0.0,
+        metavar="SEC",
+        help="프로브 후 가열 PWM을 SEC초 유지 (멀티미터용). 예: --hold 20",
+    )
+    args = parser.parse_args()
+
     print("=" * 72)
     print("  BTS7960 배선 / 드라이버 소프트웨어 프로브")
     print("=" * 72)
@@ -204,6 +232,8 @@ def main():
                     print("  → IBT-2 VCC(5V) 누락, 12V는 있으나 M+/M− 펠티어 단선,")
                     print("    또는 하프브릿지 FET 고장.")
         print("=" * 72)
+        if args.hold > 0:
+            hold_output(ser, args.hold, 0.90)
         return 0
     finally:
         try:

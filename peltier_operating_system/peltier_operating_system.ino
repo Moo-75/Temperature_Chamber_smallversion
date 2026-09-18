@@ -1,6 +1,8 @@
 #include <math.h>
 
 #define THERMISTOR_PIN A0
+#define IS_R_PIN A1
+#define IS_L_PIN A2
 #define TEMPERATURE_NOMINAL 25
 #define THERMISTOR_NOMINAL 10000
 #define NUM_SAMPLES 5
@@ -67,6 +69,10 @@ void handleSerialCommands();
 void runTemperatureControl();
 void applySignedDuty(float u);
 void stopMotor();
+void restoreDrivePins();
+int probeHold(int pin);
+int probePullup(int pin);
+float analogMean(int pin, int n);
 float measure_temp(int pin);
 float clampf(float x, float lo, float hi);
 
@@ -179,6 +185,42 @@ void handleSerialCommands() {
       Serial.print(target_temperature, 3);
       Serial.print(',');
       Serial.println(last_t, 3);
+    } else if (command.equals("PIN_PROBE")) {
+      // Detect IBT-2 input pulldowns on D7/D8/D9/D10 without extra jumpers.
+      // hold=0 means the pin discharges (wired to a pulldown). hold=1 is floating.
+      force_until_ms = 0;
+      force_u = 0.0f;
+      is_running = false;
+      stopMotor();
+      TCCR1A &= ~(_BV(COM1A1) | _BV(COM1A0) | _BV(COM1B1) | _BV(COM1B0));
+      int h7 = probeHold(R_EN);
+      int p7 = probePullup(R_EN);
+      int h8 = probeHold(L_EN);
+      int p8 = probePullup(L_EN);
+      int h9 = probeHold(RPWM);
+      int p9 = probePullup(RPWM);
+      int h10 = probeHold(LPWM);
+      int p10 = probePullup(LPWM);
+      restoreDrivePins();
+      Serial.print(h7);
+      Serial.print(',');
+      Serial.print(p7);
+      Serial.print(',');
+      Serial.print(h8);
+      Serial.print(',');
+      Serial.print(p8);
+      Serial.print(',');
+      Serial.print(h9);
+      Serial.print(',');
+      Serial.print(p9);
+      Serial.print(',');
+      Serial.print(h10);
+      Serial.print(',');
+      Serial.println(p10);
+    } else if (command.equals("GET_IS")) {
+      Serial.print(analogMean(IS_R_PIN, 8), 1);
+      Serial.print(',');
+      Serial.println(analogMean(IS_L_PIN, 8), 1);
     } else if (command.equals("GET_CTRL")) {
       // t,t_pred,rate,u,d_term,i_term,target,adc,ohm,pwm
       Serial.print(last_t, 3);
@@ -336,6 +378,45 @@ void stopMotor() {
   digitalWrite(L_EN, LOW);
   OCR1A = 0;
   OCR1B = 0;
+}
+
+void restoreDrivePins() {
+  pinMode(RPWM, OUTPUT);
+  pinMode(LPWM, OUTPUT);
+  pinMode(R_EN, OUTPUT);
+  pinMode(L_EN, OUTPUT);
+  digitalWrite(R_EN, LOW);
+  digitalWrite(L_EN, LOW);
+  TCCR1A = _BV(WGM11) | _BV(COM1A1) | _BV(COM1B1);
+  OCR1A = 0;
+  OCR1B = 0;
+}
+
+int probeHold(int pin) {
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, HIGH);
+  delay(2);
+  pinMode(pin, INPUT);
+  delayMicroseconds(250);
+  return digitalRead(pin);
+}
+
+int probePullup(int pin) {
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, LOW);
+  delay(2);
+  pinMode(pin, INPUT_PULLUP);
+  delayMicroseconds(250);
+  return digitalRead(pin);
+}
+
+float analogMean(int pin, int n) {
+  long acc = 0;
+  for (int i = 0; i < n; i++) {
+    acc += analogRead(pin);
+    delayMicroseconds(200);
+  }
+  return (float)acc / (float)n;
 }
 
 float measure_temp(int pin) {

@@ -55,20 +55,39 @@ def find_serial_port(json_dir="test.json"):
     return candidates, baudrate
 
 
+def is_boot_noise(line):
+    if not line:
+        return True
+    low = line.lower()
+    return "ready" in low or line.startswith("Arduino")
+
+
+def drain_serial(ser, wait_sec=0.4):
+    lines = []
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        if ser.in_waiting:
+            line = ser.readline().decode("utf-8", errors="replace").strip()
+            if line:
+                lines.append(line)
+        else:
+            time.sleep(0.02)
+    return lines
+
+
 def open_serial(port, baudrate):
     ser = serial.Serial()
     ser.port = port
     ser.baudrate = baudrate
     ser.timeout = 1.0
+    # Linux CDC ACM still pulses DTR on open, so the Uno resets anyway.
+    # Wait for "Arduino Ready" instead of racing GET_CTRL against boot.
     ser.dtr = False
     ser.rts = False
     ser.open()
-    time.sleep(0.4)
-    try:
-        ser.reset_input_buffer()
-    except Exception:
-        pass
-    return ser
+    time.sleep(2.0)
+    banners = drain_serial(ser, wait_sec=0.5)
+    return ser, banners
 
 
 def write_line(ser, command):
@@ -85,7 +104,7 @@ def read_line(ser, timeout_sec=1.2):
     return ""
 
 
-def cmd(ser, command, expect_reply=True, timeout_sec=1.2):
+def cmd(ser, command, expect_reply=True, timeout_sec=1.5):
     try:
         ser.reset_input_buffer()
     except Exception:
@@ -93,7 +112,24 @@ def cmd(ser, command, expect_reply=True, timeout_sec=1.2):
     write_line(ser, command)
     if not expect_reply:
         return ""
-    return read_line(ser, timeout_sec=timeout_sec)
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        line = read_line(ser, timeout_sec=max(0.05, deadline - time.time()))
+        if is_boot_noise(line):
+            continue
+        return line
+    return ""
+
+
+def query_ctrl(ser, attempts=5):
+    last_raw = ""
+    for _ in range(attempts):
+        last_raw = cmd(ser, "GET_CTRL")
+        parsed = parse_ctrl(last_raw)
+        if parsed is not None:
+            return last_raw, parsed
+        time.sleep(0.2)
+    return last_raw, None
 
 
 def parse_ctrl(raw):
@@ -254,10 +290,11 @@ def main():
 
     ser = None
     port = None
+    banners = []
     for p in candidates:
         try:
             print(f"   연결 시도: {p} ...", end=" ", flush=True)
-            ser = open_serial(p, baudrate)
+            ser, banners = open_serial(p, baudrate)
             port = p
             print("OK")
             break
@@ -274,9 +311,12 @@ def main():
     have_drive = False
     try:
         print(f"\n2) 포트 {port} — 펌웨어 handshake")
-        raw_ctrl = cmd(ser, "GET_CTRL")
+        if banners:
+            print(f"   부팅 메시지: {banners[-1]!r}")
+        else:
+            print("   부팅 메시지 없음 (포트 오픈 리셋이 안 걸렸을 수 있음)")
+        raw_ctrl, ctrl0 = query_ctrl(ser)
         print(f"   GET_CTRL raw: {raw_ctrl!r}")
-        ctrl0 = parse_ctrl(raw_ctrl)
         if ctrl0 is None:
             print("   [실패] GET_CTRL 응답이 없습니다.")
             print("   → peltier_operating_system.ino 가 안 올라가 있거나 baud가 다릅니다.")

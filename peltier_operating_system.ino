@@ -25,10 +25,13 @@ const float RATE_TAU_SEC = 0.8f;
 // 2) KD = 1.60: Strong predictive damping against velocity (-KD * dT/dt) to eliminate overshoot.
 // 3) KI = 0.025: Clean integral to eliminate steady-state error in < 8s.
 // 4) INTEGRAL_ZONE_C = 1.2f: Integrator only activates within ±1.2°C of target to prevent windup during jumps.
+// 5) RATE_GATE_C_PER_S = 0.13: Do not integrate while |dT/dt| is large, so approach
+//    does not accumulate a heat/cool I bias that reheats after the target is passed.
 const float KP = 0.25f;
 const float KD = 1.60f;
 const float KI = 0.025f;
 const float INTEGRAL_ZONE_C = 1.2f;
+const float RATE_GATE_C_PER_S = 0.13f;
 const float I_MAX = 0.50f;
 
 // Slew rate limit: output change cannot exceed ±15% per 100ms cycle (~0.67s for 0->100%).
@@ -36,6 +39,12 @@ const float DU_MAX = 0.15f;
 
 float target_temperature = 25.0f;
 bool is_running = true;
+
+// Open-loop PWM probe (FORCE_PWM). Auto-expires so a hung serial session
+// cannot leave the Peltier at full duty.
+const unsigned long FORCE_MAX_MS = 4000;
+unsigned long force_until_ms = 0;
+float force_u = 0.0f;
 
 unsigned long previousMillis = 0;
 
@@ -83,7 +92,21 @@ void loop() {
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis;
-    if (is_running) {
+    if (force_until_ms != 0) {
+      if ((long)(currentMillis - force_until_ms) >= 0) {
+        force_until_ms = 0;
+        force_u = 0.0f;
+        stopMotor();
+        u_applied = 0.0f;
+        last_u = 0.0f;
+        last_pwm = 0;
+      } else {
+        last_t = measure_temp(THERMISTOR_PIN);
+        applySignedDuty(force_u);
+        last_u = force_u;
+        u_applied = force_u;
+      }
+    } else if (is_running) {
       runTemperatureControl();
     } else {
       stopMotor();
@@ -117,11 +140,45 @@ void handleSerialCommands() {
       is_running = true;
     } else if (command.equals("STOP")) {
       is_running = false;
+      force_until_ms = 0;
+      force_u = 0.0f;
       stopMotor();
       u_applied = 0.0f;
       last_pwm = 0;
+    } else if (command.startsWith("FORCE_PWM")) {
+      float parsed_u;
+      if (readFloatArgument(command, parsed_u)) {
+        force_u = clampf(parsed_u, -1.0f, 1.0f);
+        force_until_ms = millis() + FORCE_MAX_MS;
+        applySignedDuty(force_u);
+        last_u = force_u;
+        u_applied = force_u;
+      } else {
+        Serial.println("ERR");
+      }
     } else if (command.equals("GET_TARGET")) {
       Serial.println(target_temperature, 4);
+    } else if (command.equals("GET_DRIVE")) {
+      // running,force,ocr1a,ocr1b,ren,len,u,pwm,target,t
+      Serial.print(is_running ? 1 : 0);
+      Serial.print(',');
+      Serial.print(force_until_ms != 0 ? 1 : 0);
+      Serial.print(',');
+      Serial.print((int)OCR1A);
+      Serial.print(',');
+      Serial.print((int)OCR1B);
+      Serial.print(',');
+      Serial.print(digitalRead(R_EN));
+      Serial.print(',');
+      Serial.print(digitalRead(L_EN));
+      Serial.print(',');
+      Serial.print(last_u, 3);
+      Serial.print(',');
+      Serial.print(last_pwm);
+      Serial.print(',');
+      Serial.print(target_temperature, 3);
+      Serial.print(',');
+      Serial.println(last_t, 3);
     } else if (command.equals("GET_CTRL")) {
       // t,t_pred,rate,u,d_term,i_term,target,adc,ohm,pwm
       Serial.print(last_t, 3);
@@ -224,12 +281,14 @@ void runTemperatureControl() {
   float u_unsat = p_term + d_term + i_term;
   float u = clampf(u_unsat, -1.0f, 1.0f);
 
-  // 3) Conditional Integration (Integral Zone + Clamping Anti-Windup)
-  // Only integrate within ±1.2°C of target to prevent early windup during large jumps
+  // 3) Conditional Integration (zone + anti-windup + rate gate)
+  // Skip I while moving fast so a bump does not bank heat/cool bias that
+  // turns PWM back on after the sensor crosses the target.
   bool in_integral_zone = (fabs(error) <= INTEGRAL_ZONE_C);
+  bool rate_gated = (fabs(rate_c_per_s) > RATE_GATE_C_PER_S);
   bool saturating_high = (u_unsat >= 1.0f) && (error > 0.0f);
   bool saturating_low  = (u_unsat <= -1.0f) && (error < 0.0f);
-  if (in_integral_zone && !saturating_high && !saturating_low) {
+  if (in_integral_zone && !rate_gated && !saturating_high && !saturating_low) {
     i_term += DT_SEC * (KI * error);
     i_term = clampf(i_term, -I_MAX, I_MAX);
   }

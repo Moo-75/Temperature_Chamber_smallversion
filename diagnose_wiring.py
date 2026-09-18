@@ -209,7 +209,7 @@ def main():
         else:
             print("  네 신호선(D7/D8/D9/D10)은 IBT-2 입력 풀다운에 붙어 있습니다.")
             print("  Arduino ↔ 드라이버 로직 배선은 소프트웨어상 연결로 나옵니다.")
-            if drive and (drive["ocr1a"] < 80 or drive["en_r"] != 1):
+            if drive and (drive["ocr1a"] < 80 or drive["en_r"] != 1 or drive["en_l"] != 0):
                 print("  다만 FORCE 중 OCR/EN이 비정상입니다. 펌웨어 타이머를 의심하세요.")
             elif not jumpered:
                 print("  드라이버 고장 vs 12V/펠티어 단선은 이 상태로는 구분 못 합니다.")

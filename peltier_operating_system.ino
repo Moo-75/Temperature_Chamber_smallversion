@@ -86,7 +86,7 @@ void setup() {
   pinMode(L_EN, OUTPUT);
   digitalWrite(R_EN, LOW);
   digitalWrite(L_EN, LOW);
-  TCCR1A = _BV(WGM11) | _BV(COM1A1) | _BV(COM1B1);
+  TCCR1A = _BV(WGM11);
   TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS12) | _BV(CS10);
   ICR1 = PWM_TOP;
 
@@ -359,16 +359,28 @@ void applySignedDuty(float u) {
   if (ticks > PWM_TOP) {
     ticks = PWM_TOP;
   }
-  digitalWrite(R_EN, HIGH);
-  digitalWrite(L_EN, HIGH);
-  // D9 (OCR1A) is Heating, D10 (OCR1B) is Cooling
+
+  // This IBT-2 clone must enable only one half-bridge.
+  // Both R_EN and L_EN HIGH puts the unused side's low-side FET on
+  // (INH=1, IN=0), which brakes M+ and M- together: heatsink warms,
+  // load current is ~0. Heat = right only, cool = left only.
   if (u > 0.0f) {
-    OCR1A = ticks;
+    digitalWrite(L_EN, LOW);
+    TCCR1A &= ~_BV(COM1B1);
+    digitalWrite(LPWM, LOW);
     OCR1B = 0;
+    OCR1A = ticks;
+    TCCR1A |= _BV(COM1A1);
+    digitalWrite(R_EN, HIGH);
     last_pwm = ticks;
   } else {
+    digitalWrite(R_EN, LOW);
+    TCCR1A &= ~_BV(COM1A1);
+    digitalWrite(RPWM, LOW);
     OCR1A = 0;
     OCR1B = ticks;
+    TCCR1A |= _BV(COM1B1);
+    digitalWrite(L_EN, HIGH);
     last_pwm = -ticks;
   }
 }
@@ -376,6 +388,9 @@ void applySignedDuty(float u) {
 void stopMotor() {
   digitalWrite(R_EN, LOW);
   digitalWrite(L_EN, LOW);
+  TCCR1A &= ~(_BV(COM1A1) | _BV(COM1B1));
+  digitalWrite(RPWM, LOW);
+  digitalWrite(LPWM, LOW);
   OCR1A = 0;
   OCR1B = 0;
 }
@@ -385,11 +400,8 @@ void restoreDrivePins() {
   pinMode(LPWM, OUTPUT);
   pinMode(R_EN, OUTPUT);
   pinMode(L_EN, OUTPUT);
-  digitalWrite(R_EN, LOW);
-  digitalWrite(L_EN, LOW);
-  TCCR1A = _BV(WGM11) | _BV(COM1A1) | _BV(COM1B1);
-  OCR1A = 0;
-  OCR1B = 0;
+  TCCR1A = _BV(WGM11);
+  stopMotor();
 }
 
 int probeHold(int pin) {

@@ -414,9 +414,9 @@ def main():
             time.sleep(0.15)
             fh = parse_drive(cmd(ser, "GET_DRIVE"))
             print("   HEAT force " + fmt_drive(fh))
-            if fh and fh["force"] == 1 and fh["ocr1a"] > PWM_COMMANDED_TICKS and fh["en_r"] == 1 and fh["en_l"] == 1:
+            if fh and fh["force"] == 1 and fh["ocr1a"] > PWM_COMMANDED_TICKS and fh["en_r"] == 1 and fh["en_l"] == 0:
                 force_ok = True
-                print("   Timer1 OCR1A(가열) + R_EN/L_EN=HIGH. 펌웨어가 핀을 실제로 켰습니다.")
+                print("   Timer1 OCR1A(가열) + R_EN=1 L_EN=0. 펌웨어가 핀을 실제로 켰습니다.")
             else:
                 print("   [원인] FORCE_PWM 가열에서 OCR1A 또는 enable이 안 켜짐.")
                 findings.append("force_heat_fail")
@@ -426,8 +426,8 @@ def main():
             time.sleep(0.15)
             fc = parse_drive(cmd(ser, "GET_DRIVE"))
             print("   COOL force " + fmt_drive(fc))
-            if fc and fc["ocr1b"] > PWM_COMMANDED_TICKS and fc["en_r"] == 1 and fc["en_l"] == 1:
-                print("   Timer1 OCR1B(냉각) + enable HIGH.")
+            if fc and fc["ocr1b"] > PWM_COMMANDED_TICKS and fc["en_r"] == 0 and fc["en_l"] == 1:
+                print("   Timer1 OCR1B(냉각) + R_EN=0 L_EN=1.")
             else:
                 print("   [원인] FORCE_PWM 냉각에서 OCR1B 또는 enable이 안 켜짐.")
                 findings.append("force_cool_fail")
@@ -473,7 +473,7 @@ def main():
             print("    3) BTS7960: RPWM←D9, LPWM←D10, R_EN←D7, L_EN←D8")
             print("    4) 드라이버 보드 LED / 발열 / 팬 유무")
             if have_drive:
-                print("    GET_DRIVE 에서 OCR1A/OCR1B 와 R_EN/L_EN=1 이면")
+                print("    GET_DRIVE 에서 가열은 R_EN=1 L_EN=0, 냉각은 그 반대여야 합니다.")
                 print("    아두이노 핀 출력은 정상, BTS7960 이후를 의심하세요.")
         else:
             print("  소프트웨어 PWM도 나가고, 온도도 목표 방향으로 움직입니다.")

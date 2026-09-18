@@ -68,6 +68,7 @@ else
     git clone "${REPO}" "${CLONE_DIR}"
 fi
 chmod +x "${CLONE_DIR}/link_arduino.sh" 2>/dev/null || true
+chmod +x "${CLONE_DIR}/upload_arduino.sh" 2>/dev/null || true
 chmod +x "${CLONE_DIR}/setup_new_pi.sh" 2>/dev/null || true
 
 echo ""
@@ -92,8 +93,7 @@ echo "[8/8] 완료"
 echo "================================================================"
 echo " 재부팅:   sudo reboot"
 echo " 재부팅 후:"
-echo "   Arduino IDE로 peltier_operating_system.ino 업로드"
-echo "   cd ${CLONE_DIR} && ./link_arduino.sh"
+echo "   cd ${CLONE_DIR} && ./upload_arduino.sh && ./link_arduino.sh"
 echo "   python3 test_GPIO.py"
 echo "   python3 maintemp.py"
 echo "================================================================"

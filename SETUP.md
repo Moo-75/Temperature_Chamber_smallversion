@@ -23,8 +23,8 @@ Raspberry Pi Imager: 64-bit OS, 사용자 `pi`, SSH, Wi-Fi KR, 시간대 Asia/Se
 cd ~/Desktop
 git clone https://github.com/Moo-75/Temperature_Chamber_smallversion.git
 cd Temperature_Chamber_smallversion
-sed -i 's/\r$//' setup_new_pi.sh link_arduino.sh
-chmod +x setup_new_pi.sh link_arduino.sh
+sed -i 's/\r$//' setup_new_pi.sh link_arduino.sh upload_arduino.sh
+chmod +x setup_new_pi.sh link_arduino.sh upload_arduino.sh
 ./setup_new_pi.sh
 sudo reboot
 ```
@@ -33,7 +33,20 @@ sudo reboot
 
 ## Phase 2 — Arduino 펌웨어
 
-PC의 Arduino IDE에서 `peltier_operating_system.ino`를 Uno에 업로드.
+파이 CLI에서 USB로 연결된 Uno에 바로 올린다 (PC Arduino IDE 불필요):
+
+```bash
+cd ~/Desktop/Temperature_Chamber_smallversion
+./upload_arduino.sh
+```
+
+`maintemp.py` 가 포트를 잡고 있으면:
+
+```bash
+./upload_arduino.sh --kill
+```
+
+최초 1회는 `arduino-cli`와 AVR 코어를 받아서 인터넷이 필요하다.
 
 배선 (Arduino):
 

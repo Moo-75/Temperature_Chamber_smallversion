@@ -12,12 +12,18 @@ Small temperature chamber for TL1 / TL2.
 cd ~/Desktop
 git clone https://github.com/Moo-75/Temperature_Chamber_smallversion.git
 cd Temperature_Chamber_smallversion
-chmod +x setup_new_pi.sh link_arduino.sh
+chmod +x setup_new_pi.sh link_arduino.sh upload_arduino.sh
 ./setup_new_pi.sh
 sudo reboot
 ```
 
-Then upload `peltier_operating_system.ino` to the Arduino, run `./link_arduino.sh`, and:
+Then on the Pi, flash firmware over USB and link the serial port:
+
+```bash
+cd ~/Desktop/Temperature_Chamber_smallversion
+./upload_arduino.sh
+./link_arduino.sh
+```
 
 ```bash
 python3 test_GPIO.py

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Arduino USB 시리얼을 /dev/arduino 로 링크한다.
-# 펌웨어는 Arduino IDE로 peltier_operating_system.ino 를 올려둘 것.
+# 펌웨어는 ./upload_arduino.sh 로 올린다.
 set -euo pipefail
 
 pick_dev() {

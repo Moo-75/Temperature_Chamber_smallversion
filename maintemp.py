@@ -9,7 +9,7 @@ import math
 import json
 import csv
 import maze
-from task_temp import TL1_Task, TL2_Task
+from task_temp import TL0_Task, TL1_Task, TL2_Task
 import time
 
 SENSOR_LOG_INTERVAL_MS = 100
@@ -258,6 +258,7 @@ if __name__ == "__main__":
         task = input(
             """
 To start enter number you want to run
+    [TL0] TL0: poke-only, choice +5/6/7°C, no-choice -1.5/-2/-2.5°C (30s / poke 20s, no-choice 10s, max 35°C)
     [TL1] TL1: poke-only, choice +4.5/5/5.5°C, no-choice -1.5/-2/-2.5°C (20s / 20s)
     [TL2] TL2: poke-only, choice +3/3.5/4°C, no-choice -1.5/-2/-2.5°C (10s / 20s)
     [0] Exit
@@ -274,7 +275,19 @@ To start enter number you want to run
         )
         sensor_process.start()
 
-        if task == "TL1":
+        if task == "TL0":
+            instance = TL0_Task(
+                json_dir,
+                TrialData_file_name,
+                mouse_id,
+                session,
+                shared_data,
+                dict_lock,
+                start_time,
+                peltier_queue,
+                stop_event,
+            )
+        elif task == "TL1":
             instance = TL1_Task(
                 json_dir,
                 TrialData_file_name,

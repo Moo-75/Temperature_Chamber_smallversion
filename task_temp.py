@@ -164,17 +164,27 @@ class Task:
         start_temp=10.0,
         temp_min=10.0,
         temp_max=40.0,
-        no_choice_drop_choices=(2.5, 3.0, 3.5),
-        bump_balance_block=20,
-        no_choice_balance_block=20,
+                              no_choice_drop_choices=(2.5, 3.0, 3.5),
+                              bump_balance_block=20,
+                              no_choice_balance_block=20,
         choice_window=20.0,
         feedback_window=40.0,
+        feedback_window_choice=None,
+        feedback_window_no_choice=None,
         task_time=60,
     ):
         """
         TL shared core. Single poke, trial-based.
-        LED is ON during choice_window and OFF during feedback_window / ITI.
+        LED is ON during choice_window and OFF during feedback.
         """
+        fb_after_choice = (
+            feedback_window if feedback_window_choice is None else feedback_window_choice
+        )
+        fb_after_no_choice = (
+            feedback_window
+            if feedback_window_no_choice is None
+            else feedback_window_no_choice
+        )
         file_name_td = self.file_trialdata + "_trial-wise.csv"
         directory = os.path.dirname(file_name_td)
         col_name_td = TL_COL_NAME
@@ -393,8 +403,9 @@ class Task:
             if session_done:
                 break
 
+            this_feedback = fb_after_choice if choice else fb_after_no_choice
             fb_start = time.time()
-            while (time.time() - fb_start) < feedback_window:
+            while (time.time() - fb_start) < this_feedback:
                 if (time.time() - start_Ex) >= task_time * 60:
                     session_done = True
                     break
@@ -445,6 +456,17 @@ class Task:
         self.stop_event.set()
         print("=== TL Session Ended ===")
 
+    def TL0(self):
+        print("=== TL0: Temperature lift (+5/6/7, -1.5/-2/-2.5, 30s / poke 20s / no-choice 10s, max 35°C) ===")
+        self._run_temperature_lift(
+            bump_choices=(5.0, 6.0, 7.0),
+            no_choice_drop_choices=(1.5, 2.0, 2.5),
+            choice_window=30.0,
+            feedback_window_choice=20.0,
+            feedback_window_no_choice=10.0,
+            temp_max=35.0,
+        )
+
     def TL1(self):
         print("=== TL1: Temperature lift (+4.5/5/5.5, -1.5/-2/-2.5, 20s/20s) ===")
         self._run_temperature_lift(
@@ -462,6 +484,11 @@ class Task:
             choice_window=10.0,
             feedback_window=20.0,
         )
+
+
+class TL0_Task(Task):
+    def task(self):
+        self.TL0()
 
 
 class TL1_Task(Task):

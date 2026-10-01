@@ -9,7 +9,10 @@ import math
 import json
 import csv
 import maze
-from task_temp import TL0_Task, TL1_Task, TL2_Task
+from task_temp import (
+    TL0_Task, TL1_Task, TL2_Task, TLS_Task, TLSB_Task, TLY_Task, TLC_Task, TLM_Task,
+    list_yoke_sources, load_yoke_file,
+)
 import time
 
 SENSOR_LOG_INTERVAL_MS = 100
@@ -254,19 +257,57 @@ if __name__ == "__main__":
             print(e)
     SensorTime_file_name = create_path(csv_write_dir, SensorTime_file_name)
 
+    task_classes = {
+        "TLS": TLS_Task,
+        "TLSB": TLSB_Task,
+        "TLY": TLY_Task,
+        "TLC": TLC_Task,
+        "TLM": TLM_Task,
+        "TL0": TL0_Task,
+        "TL1": TL1_Task,
+        "TL2": TL2_Task,
+    }
+
     while True:
         task = input(
             """
-To start enter number you want to run
+To start enter the task name you want to run
+    [TLS]  Shaping: LED on except 10s after a poke; every LED-on poke +5/6/7°C (0.5s flash); 30s without poke -1/-2/-3°C (start 24°C, 10-34°C)
+    [TLSB] TLS with a 10-min baseline first (held at 24°C, pokes do nothing) - use on day 1
+    [TLY]  Yoked: replays this mouse's last completed TLS target schedule; pokes flash but never change temperature
+    [TLC]  Cue: TLS outcomes with LED windows (25s / 10s / 10s, start 24°C, 10-34°C)
+    [TLM]  Main: poke +2/4/6°C, no-choice -0/-2/-4°C (20s / 10s / 10s, start 24°C, 10-38°C)
     [TL0] TL0: poke-only, choice +5/6/7°C, no-choice -1.5/-2/-2.5°C (30s / poke 20s, no-choice 10s, max 35°C)
     [TL1] TL1: poke-only, choice +4.5/5/5.5°C, no-choice -1.5/-2/-2.5°C (20s / 20s)
     [TL2] TL2: poke-only, choice +3/3.5/4°C, no-choice -1.5/-2/-2.5°C (10s / 20s)
     [0] Exit
 """
-        )
+        ).strip()
         if task == "0":
             print("Selected Exit")
             break
+        if task not in task_classes:
+            print("Wrong input, please try again\n")
+            continue
+
+        yoke = None
+        if task == "TLY":
+            # Resolve the yoke source BEFORE any logger starts, so a missing source
+            # never leaves a half-started session behind.
+            sources = list_yoke_sources(mouse_id, data)
+            if not sources:
+                print(f"[TLY] No completed TLS session found for mouse '{mouse_id}'. Run TLS first.")
+                continue
+            print(f"[TLY] Completed TLS sessions for {mouse_id} (newest first):")
+            for i, (stamp, path, info) in enumerate(sources[:5]):
+                print(f"   [{i}] {info.get('session')}  {stamp}  pokes={info.get('n_pokes')}  "
+                      f"trials={info.get('n_trials')}  ({os.path.basename(path)})")
+            pick = input("Press Enter to yoke to [0] (most recent), type another index, or 'n' to cancel: ").strip()
+            if pick.lower() == "n":
+                continue
+            idx = int(pick) if pick.isdigit() and int(pick) < len(sources[:5]) else 0
+            yoke = load_yoke_file(sources[idx][1])
+            print(f"[TLY] yoked to {yoke.get('session')} ({yoke.get('started_at')})")
 
         start_time = time.time()
         sensor_process = multiprocessing.Process(
@@ -275,46 +316,19 @@ To start enter number you want to run
         )
         sensor_process.start()
 
-        if task == "TL0":
-            instance = TL0_Task(
-                json_dir,
-                TrialData_file_name,
-                mouse_id,
-                session,
-                shared_data,
-                dict_lock,
-                start_time,
-                peltier_queue,
-                stop_event,
-            )
-        elif task == "TL1":
-            instance = TL1_Task(
-                json_dir,
-                TrialData_file_name,
-                mouse_id,
-                session,
-                shared_data,
-                dict_lock,
-                start_time,
-                peltier_queue,
-                stop_event,
-            )
-        elif task == "TL2":
-            instance = TL2_Task(
-                json_dir,
-                TrialData_file_name,
-                mouse_id,
-                session,
-                shared_data,
-                dict_lock,
-                start_time,
-                peltier_queue,
-                stop_event,
-            )
-        else:
-            print("Wrong input, please try again\n")
-            sensor_process.terminate()
-            continue
+        instance = task_classes[task](
+            json_dir,
+            TrialData_file_name,
+            mouse_id,
+            session,
+            shared_data,
+            dict_lock,
+            start_time,
+            peltier_queue,
+            stop_event,
+        )
+        if yoke is not None:
+            instance.yoke = yoke
 
         task_ = multiprocessing.Process(
             target=data_export.write_every_n_miliseconds,

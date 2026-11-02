@@ -10,7 +10,7 @@ import json
 import csv
 import maze
 from task_temp import (
-    TL0_Task, TL1_Task, TL2_Task, TLS_Task, TLSB_Task, TLY_Task, TLC_Task, TLM_Task,
+    TL0_Task, TL1_Task, TL2_Task, TLS_Task, TLSB_Task, TLY_Task, TLC_Task, TLM_Task, TLV_Task,
     list_yoke_sources, load_yoke_file,
 )
 import time
@@ -190,20 +190,8 @@ if __name__ == "__main__":
         mouse_id = input("Please reenter the mouse id (do not use _ in the name) : ")
         session = input("Please reenter the session : ")
 
-    temperature_seton = input("If do you need temperature set on, press y  ")
-    need_seton = False
-    initial_target_temp = None
-
-    if temperature_seton in ("y", "Y"):
-        target_temp = input("Please enter the target temperature : ")
-        while True:
-            try:
-                target_temp = float(target_temp)
-                need_seton = True
-                initial_target_temp = target_temp
-                break
-            except ValueError:
-                target_temp = input("Please reenter the target temperature : ")
+    temperature_seton = input("If you need to preheat the chamber to 24°C before the task, press y  ")
+    need_seton = temperature_seton in ("y", "Y")
 
     multi_var_manager = multiprocessing.Manager()
     shared_data = multi_var_manager.dict({
@@ -220,7 +208,6 @@ if __name__ == "__main__":
         "adc": 0.0,
         "ohm": 0.0,
         "pwm": 0,
-        "initial_target_temp": initial_target_temp,
     })
     dict_lock = multiprocessing.Lock()
     stop_event = multi_var_manager.Event()
@@ -233,7 +220,7 @@ if __name__ == "__main__":
     peltier_process.start()
 
     if need_seton:
-        peltier_queue.put(("SET_ON_WAIT", target_temp))
+        peltier_queue.put(("SET_ON_WAIT", 24.0))
         try:
             seton_success = result_queue.get(timeout=300)
         except Empty:
@@ -241,7 +228,7 @@ if __name__ == "__main__":
         if not seton_success:
             stop_event.set()
             peltier_process.join(timeout=5)
-            raise RuntimeError(f"Failed to reach target temperature {target_temp}.")
+            raise RuntimeError("Failed to preheat the chamber to 24°C.")
 
     while True:
         experiment_start = input("If the experiment start, press y  ")
@@ -263,6 +250,7 @@ if __name__ == "__main__":
         "TLY": TLY_Task,
         "TLC": TLC_Task,
         "TLM": TLM_Task,
+        "TLV": TLV_Task,
         "TL0": TL0_Task,
         "TL1": TL1_Task,
         "TL2": TL2_Task,
@@ -272,14 +260,16 @@ if __name__ == "__main__":
         task = input(
             """
 To start enter the task name you want to run
-    [TLS]  Shaping: LED on except 10s after a poke; every LED-on poke +5/6/7°C (0.5s flash); 30s without poke -1/-2/-3°C (start 24°C, 10-34°C)
+    [TLS]  Shaping: LED on except 10s after a poke; poke +5/6/7°C; 30s without poke -1/-2/-3°C (start 24°C, 10-36°C)
     [TLSB] TLS with a 10-min baseline first (held at 24°C, pokes do nothing) - use on day 1
     [TLY]  Yoked: replays this mouse's last completed TLS target schedule; pokes flash but never change temperature
-    [TLC]  Cue: TLS outcomes with LED windows (25s / 10s / 10s, start 24°C, 10-34°C)
-    [TLM]  Main: poke +2/4/6°C, no-choice -0/-2/-4°C (20s / 10s / 10s, start 24°C, 10-38°C)
-    [TL0] TL0: poke-only, choice +5/6/7°C, no-choice -1.5/-2/-2.5°C (30s / poke 20s, no-choice 10s, max 35°C)
-    [TL1] TL1: poke-only, choice +4.5/5/5.5°C, no-choice -1.5/-2/-2.5°C (20s / 20s)
-    [TL2] TL2: poke-only, choice +3/3.5/4°C, no-choice -1.5/-2/-2.5°C (10s / 20s)
+    [TLC]  Cue: TLS outcomes with LED windows (25s / 10s / 10s, start 24°C, 10-36°C)
+    [TLM]  Main: poke +2/4/6°C, no-choice -0/-2/-4°C (20s / 10s / 10s, start 24°C, 10-36°C); bump 1s after poke, ~10% omitted
+    [TLV]  Value cue: TLM + LED flicker (steady / 2 Hz / 5 Hz) announces the bump; ~10% non-contingent ±4°C shifts
+    [TL0] TL0: continuous poke +5/6/7°C, target held 60s after each poke, then drifts -3°C/min
+    [TL1] TL1: poke +5/6/7°C, no-choice -1/-2/-3°C (40s choice / 10s feedback)
+    [TL2] TL2: poke +2/4/6°C, no-choice -0/-2/-4°C (30s choice / 10s feedback)
+    All tasks stop after 60 min, 20 min continuously at/below 10.5°C, or a 24°C rolling mean (30 min; TL2 45 min).
     [0] Exit
 """
         ).strip()

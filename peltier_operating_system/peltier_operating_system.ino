@@ -360,26 +360,26 @@ void applySignedDuty(float u) {
     ticks = PWM_TOP;
   }
 
-  // This IBT-2 clone must enable only one half-bridge.
-  // Both R_EN and L_EN HIGH puts the unused side's low-side FET on
-  // (INH=1, IN=0), which brakes M+ and M- together: heatsink warms,
-  // load current is ~0. Heat = right only, cool = left only.
+  // Both half-bridges stay enabled. PWM on one IN pin turns that high side
+  // on; the other IN pin stays low so its low side is the return path.
+  // One EN low leaves that motor terminal open, so a Peltier between M+ and
+  // M- draws no current. Brake is both EN high with both IN equal, not used.
   if (u > 0.0f) {
-    digitalWrite(L_EN, LOW);
     TCCR1A &= ~_BV(COM1B1);
     digitalWrite(LPWM, LOW);
     OCR1B = 0;
     OCR1A = ticks;
     TCCR1A |= _BV(COM1A1);
+    digitalWrite(L_EN, HIGH);
     digitalWrite(R_EN, HIGH);
     last_pwm = ticks;
   } else {
-    digitalWrite(R_EN, LOW);
     TCCR1A &= ~_BV(COM1A1);
     digitalWrite(RPWM, LOW);
     OCR1A = 0;
     OCR1B = ticks;
     TCCR1A |= _BV(COM1B1);
+    digitalWrite(R_EN, HIGH);
     digitalWrite(L_EN, HIGH);
     last_pwm = -ticks;
   }

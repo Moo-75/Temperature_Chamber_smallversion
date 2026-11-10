@@ -20,20 +20,15 @@ const unsigned long interval = 100;
 
 // Filter and spike rejection for rate of change (dT/dt)
 const float SPIKE_C = 1.2f;
-const float RATE_TAU_SEC = 0.8f;
+const float RATE_TAU_SEC = 1.2f;
 
 // Robust PID with Derivative on Measurement (Damping) & Clamping Anti-Windup
-// 1) KP = 0.25: ±4°C error provides 100% full saturation for fast transition.
-// 2) KD = 1.60: Strong predictive damping against velocity (-KD * dT/dt) to eliminate overshoot.
-// 3) KI = 0.025: Clean integral to eliminate steady-state error in < 8s.
-// 4) INTEGRAL_ZONE_C = 1.2f: Integrator only activates within ±1.2°C of target to prevent windup during jumps.
-// 5) RATE_GATE_C_PER_S = 0.13: Do not integrate while |dT/dt| is large, so approach
-//    does not accumulate a heat/cool I bias that reheats after the target is passed.
+// Match the 0019895 controller used as the existing-chamber reference.
+// P, derivative damping, and I all contribute to the commanded output.
+// Conditional integration prevents windup in the saturated error direction.
 const float KP = 0.25f;
-const float KD = 1.60f;
+const float KD = 1.00f;
 const float KI = 0.025f;
-const float INTEGRAL_ZONE_C = 1.2f;
-const float RATE_GATE_C_PER_S = 0.13f;
 const float I_MAX = 0.50f;
 
 // Slew rate limit: output change cannot exceed ±15% per 100ms cycle (~0.67s for 0->100%).
@@ -323,14 +318,10 @@ void runTemperatureControl() {
   float u_unsat = p_term + d_term + i_term;
   float u = clampf(u_unsat, -1.0f, 1.0f);
 
-  // 3) Conditional Integration (zone + anti-windup + rate gate)
-  // Skip I while moving fast so a bump does not bank heat/cool bias that
-  // turns PWM back on after the sensor crosses the target.
-  bool in_integral_zone = (fabs(error) <= INTEGRAL_ZONE_C);
-  bool rate_gated = (fabs(rate_c_per_s) > RATE_GATE_C_PER_S);
+  // 3) Conditional integration: do not wind up in the saturated direction.
   bool saturating_high = (u_unsat >= 1.0f) && (error > 0.0f);
   bool saturating_low  = (u_unsat <= -1.0f) && (error < 0.0f);
-  if (in_integral_zone && !rate_gated && !saturating_high && !saturating_low) {
+  if (!saturating_high && !saturating_low) {
     i_term += DT_SEC * (KI * error);
     i_term = clampf(i_term, -I_MAX, I_MAX);
   }

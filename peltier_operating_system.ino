@@ -43,6 +43,12 @@ const unsigned long FORCE_MAX_MS = 4000;
 unsigned long force_until_ms = 0;
 float force_u = 0.0f;
 
+// EN_MODE. BOTH is the default so other chambers keep a return path.
+// ONE enables only the half-bridge that is being PWM'd. Some IBT-2 clones
+// brake (both outputs shorted) when the idle EN pin is also high, which
+// heats the driver and leaves the Peltier with almost no current.
+bool en_one_side = false;
+
 unsigned long previousMillis = 0;
 
 bool have_prev_temp = false;
@@ -154,6 +160,28 @@ void handleSerialCommands() {
         applySignedDuty(force_u);
         last_u = force_u;
         u_applied = force_u;
+      } else {
+        Serial.println("ERR");
+      }
+    } else if (command.startsWith("EN_MODE")) {
+      force_until_ms = 0;
+      force_u = 0.0f;
+      stopMotor();
+      u_applied = 0.0f;
+      last_u = 0.0f;
+      last_pwm = 0;
+      int comma = command.indexOf(',');
+      String mode = (comma < 0) ? String("") : command.substring(comma + 1);
+      mode.trim();
+      mode.toUpperCase();
+      if (mode.length() == 0) {
+        Serial.println(en_one_side ? "ONE" : "BOTH");
+      } else if (mode == "ONE" || mode == "SINGLE") {
+        en_one_side = true;
+        Serial.println("ONE");
+      } else if (mode == "BOTH" || mode == "DUAL") {
+        en_one_side = false;
+        Serial.println("BOTH");
       } else {
         Serial.println("ERR");
       }
@@ -351,27 +379,35 @@ void applySignedDuty(float u) {
     ticks = PWM_TOP;
   }
 
-  // Both half-bridges stay enabled. PWM on one IN pin turns that high side
-  // on; the other IN pin stays low so its low side is the return path.
-  // One EN low leaves that motor terminal open, so a Peltier between M+ and
-  // M- draws no current. Brake is both EN high with both IN equal, not used.
+  // BOTH: idle IN is low and its EN stays high, so that low-side is the
+  // return path. ONE: idle EN stays low. Some clones brake if it is high.
   if (u > 0.0f) {
+    if (en_one_side) {
+      digitalWrite(L_EN, LOW);
+    }
     TCCR1A &= ~_BV(COM1B1);
     digitalWrite(LPWM, LOW);
     OCR1B = 0;
     OCR1A = ticks;
     TCCR1A |= _BV(COM1A1);
-    digitalWrite(L_EN, HIGH);
     digitalWrite(R_EN, HIGH);
+    if (!en_one_side) {
+      digitalWrite(L_EN, HIGH);
+    }
     last_pwm = ticks;
   } else {
+    if (en_one_side) {
+      digitalWrite(R_EN, LOW);
+    }
     TCCR1A &= ~_BV(COM1A1);
     digitalWrite(RPWM, LOW);
     OCR1A = 0;
     OCR1B = ticks;
     TCCR1A |= _BV(COM1B1);
-    digitalWrite(R_EN, HIGH);
     digitalWrite(L_EN, HIGH);
+    if (!en_one_side) {
+      digitalWrite(R_EN, HIGH);
+    }
     last_pwm = -ticks;
   }
 }

@@ -49,6 +49,18 @@ float force_u = 0.0f;
 // heats the driver and leaves the Peltier with almost no current.
 bool en_one_side = false;
 
+// IS_CAP. Blocking capture of IBT-2 R_IS (A1), L_IS (A2), thermistor (A0)
+// and the actual D9/D10 pin levels. The BTS7960 IS pin carries a current
+// proportional to the high-side load current, and a fixed large current on
+// a fault, so the trace shows whether each PWM pulse really conducts.
+// Binary record per sample, little-endian uint32:
+//   bits 0-9 A1, 10-19 A2, 20-29 A0, bit 30 D9 level, bit 31 D10 level.
+// Any byte arriving on serial aborts the capture. The drive is stopped
+// before and after, and the controller is left stopped.
+const long IS_CAP_MAX_MS = 12000;
+const long IS_CAP_MIN_PERIOD_US = 500;
+const long IS_CAP_MAX_PERIOD_US = 20000;
+
 unsigned long previousMillis = 0;
 
 bool have_prev_temp = false;
@@ -76,6 +88,9 @@ int probePullup(int pin);
 float analogMean(int pin, int n);
 float measure_temp(int pin);
 float clampf(float x, float lo, float hi);
+bool isNumberToken(const String &token, bool allow_fraction);
+bool parseIsCapArgs(const String &command, float &u, long &total_ms, long &pre_ms, long &period_us);
+void captureIs(float u, long total_ms, long pre_ms, long period_us);
 
 void setup() {
   Serial.begin(115200);
@@ -240,6 +255,18 @@ void handleSerialCommands() {
       Serial.print(h10);
       Serial.print(',');
       Serial.println(p10);
+    } else if (command.startsWith("IS_CAP")) {
+      // IS_CAP,<u>,<total_ms>,<pre_ms>,<period_us>
+      // pre_ms of STOP baseline, then signed duty u until total_ms.
+      float cap_u;
+      long cap_total_ms;
+      long cap_pre_ms;
+      long cap_period_us;
+      if (parseIsCapArgs(command, cap_u, cap_total_ms, cap_pre_ms, cap_period_us)) {
+        captureIs(cap_u, cap_total_ms, cap_pre_ms, cap_period_us);
+      } else {
+        Serial.println("ERR");
+      }
     } else if (command.equals("GET_IS")) {
       Serial.print(analogMean(IS_R_PIN, 8), 1);
       Serial.print(',');
@@ -484,4 +511,136 @@ float measure_temp(int pin) {
   float steinhart = log(resistance / THERMISTOR_NOMINAL) / BCO_EFFICIENT;
   steinhart += 1.0f / (TEMPERATURE_NOMINAL + 273.15f);
   return 1.0f / steinhart - 273.15f;
+}
+
+bool isNumberToken(const String &token, bool allow_fraction) {
+  if (token.length() == 0) {
+    return false;
+  }
+  bool saw_digit = false;
+  bool saw_dot = false;
+  for (unsigned int i = 0; i < token.length(); i++) {
+    char c = token.charAt(i);
+    if (isDigit(c)) {
+      saw_digit = true;
+    } else if (allow_fraction && c == '.' && !saw_dot) {
+      saw_dot = true;
+    } else if (allow_fraction && c == '-' && i == 0) {
+      continue;
+    } else {
+      return false;
+    }
+  }
+  return saw_digit;
+}
+
+bool parseIsCapArgs(const String &command, float &u, long &total_ms, long &pre_ms, long &period_us) {
+  String parts[4];
+  int start = command.indexOf(',');
+  if (start < 0) {
+    return false;
+  }
+  for (int i = 0; i < 4; i++) {
+    int next = command.indexOf(',', start + 1);
+    if ((i < 3 && next < 0) || (i == 3 && next >= 0)) {
+      return false;
+    }
+    parts[i] = (next < 0) ? command.substring(start + 1) : command.substring(start + 1, next);
+    parts[i].trim();
+    start = next;
+  }
+  if (!isNumberToken(parts[0], true)) {
+    return false;
+  }
+  for (int i = 1; i < 4; i++) {
+    if (!isNumberToken(parts[i], false)) {
+      return false;
+    }
+  }
+  u = parts[0].toFloat();
+  total_ms = parts[1].toInt();
+  pre_ms = parts[2].toInt();
+  period_us = parts[3].toInt();
+  if (u < -1.0f || u > 1.0f) {
+    return false;
+  }
+  if (total_ms < 1 || total_ms > IS_CAP_MAX_MS) {
+    return false;
+  }
+  if (pre_ms < 0 || pre_ms > total_ms) {
+    return false;
+  }
+  return period_us >= IS_CAP_MIN_PERIOD_US && period_us <= IS_CAP_MAX_PERIOD_US;
+}
+
+void captureIs(float u, long total_ms, long pre_ms, long period_us) {
+  force_until_ms = 0;
+  force_u = 0.0f;
+  is_running = false;
+  stopMotor();
+  u_applied = 0.0f;
+  last_u = 0.0f;
+  last_pwm = 0;
+
+  unsigned long n = (unsigned long)(total_ms * 1000L / period_us);
+  unsigned long pre_n = (unsigned long)(pre_ms * 1000L / period_us);
+  Serial.print("ISCAP,BEGIN,");
+  Serial.print(n);
+  Serial.print(',');
+  Serial.print(period_us);
+  Serial.print(',');
+  Serial.println(pre_n);
+
+  unsigned long sent = 0;
+  unsigned long overruns = 0;
+  bool aborted = false;
+  unsigned long t0 = micros();
+  unsigned long next = t0;
+  for (unsigned long i = 0; i < n; i++) {
+    if (i == pre_n) {
+      applySignedDuty(u);
+      last_u = u;
+      u_applied = u;
+    }
+    while ((long)(micros() - next) < 0) {
+    }
+    if ((long)(micros() - next) > period_us) {
+      overruns++;
+    }
+    next += (unsigned long)period_us;
+
+    uint8_t pins = PINB;  // D9 = PB1, D10 = PB2: the real output levels
+    uint32_t ph9 = (pins >> 1) & 1;
+    uint32_t ph10 = (pins >> 2) & 1;
+    uint32_t a1 = (uint32_t)analogRead(IS_R_PIN);
+    uint32_t a2 = (uint32_t)analogRead(IS_L_PIN);
+    uint32_t a0 = (uint32_t)analogRead(THERMISTOR_PIN);
+    uint32_t word = a1 | (a2 << 10) | (a0 << 20) | (ph9 << 30) | (ph10 << 31);
+    uint8_t rec[4];
+    rec[0] = (uint8_t)(word & 0xFF);
+    rec[1] = (uint8_t)((word >> 8) & 0xFF);
+    rec[2] = (uint8_t)((word >> 16) & 0xFF);
+    rec[3] = (uint8_t)((word >> 24) & 0xFF);
+    Serial.write(rec, 4);
+    sent++;
+    if (Serial.available() > 0) {
+      aborted = true;
+      break;
+    }
+  }
+  unsigned long elapsed = micros() - t0;
+
+  stopMotor();
+  u_applied = 0.0f;
+  last_u = 0.0f;
+  last_pwm = 0;
+
+  Serial.print("\nISCAP,END,");
+  Serial.print(sent);
+  Serial.print(',');
+  Serial.print(overruns);
+  Serial.print(',');
+  Serial.print(elapsed);
+  Serial.print(',');
+  Serial.println(aborted ? 1 : 0);
 }

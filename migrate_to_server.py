@@ -46,6 +46,7 @@ EXPERIMENT_PATTERNS = (
     "TD_*.csv",
     "TD_*",
     "temp_test_*.csv",
+    "PerfBands_*.csv",
 )
 
 # Set in main() when sshpass-based passwordless auth is enabled.

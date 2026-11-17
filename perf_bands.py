@@ -42,8 +42,9 @@ Usage
   python perf_bands.py --plan pilot    # first real run: heating sweep and big bump up only
   python perf_bands.py                 # full run on the real chamber (asks first)
 
-Outputs per run: samples.csv (10 Hz), events.csv, open_bands.csv, steps.csv, meta.json,
-and PNG figures. Default folder: perf_runs/bands_<timestamp>/ next to this script.
+Outputs per run: PerfBands_samples.csv (10 Hz), PerfBands_events.csv, PerfBands_open_bands.csv,
+PerfBands_steps.csv, meta.json, and PNG figures. Default folder: perf_runs/PerfBands_<timestamp>/
+next to this script. The prefix lets migrate_to_server.py find the folder.
 """
 
 import argparse
@@ -66,6 +67,8 @@ FORCE_REFRESH_S = 1.0    # FORCE_PWM expires after 4 s in the firmware
 ADC_STEP_C = 0.0874      # plate ADC step near 24 C (10 kOhm, B = 3950); simulator only
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIRMWARE = "peltier_operating_system.ino"
+# Output CSVs carry this prefix so that migrate_to_server.py (EXPERIMENT_PATTERNS) finds the folder.
+CSV_PREFIX = "PerfBands_"
 
 
 class Abort(Exception):
@@ -444,7 +447,7 @@ class Recorder:
     def __init__(self, outdir):
         os.makedirs(outdir, exist_ok=True)
         self.outdir = outdir
-        self._f = open(os.path.join(outdir, "samples.csv"), "w", newline="", encoding="utf-8")
+        self._f = open(os.path.join(outdir, CSV_PREFIX + "samples.csv"), "w", newline="", encoding="utf-8")
         self._w = csv.writer(self._f)
         self._w.writerow(self.COLS)
         self._n = 0
@@ -461,9 +464,9 @@ class Recorder:
 
     def close(self, meta):
         self._f.close()
-        write_rows(os.path.join(self.outdir, "events.csv"), self.events)
-        write_rows(os.path.join(self.outdir, "open_bands.csv"), self.bands)
-        write_rows(os.path.join(self.outdir, "steps.csv"), self.steps)
+        write_rows(os.path.join(self.outdir, CSV_PREFIX + "events.csv"), self.events)
+        write_rows(os.path.join(self.outdir, CSV_PREFIX + "open_bands.csv"), self.bands)
+        write_rows(os.path.join(self.outdir, CSV_PREFIX + "steps.csv"), self.steps)
         with open(os.path.join(self.outdir, "meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
 
@@ -906,7 +909,7 @@ def make_figures(outdir):
             return list(csv.DictReader(f))
 
     written = []
-    bands = read("open_bands.csv")
+    bands = read(CSV_PREFIX + "open_bands.csv")
     if bands:
         fig, ax = plt.subplots(figsize=(6, 4))
         for direction, label, color in ((1, "heating, full duty", "#D55E00"),
@@ -925,7 +928,7 @@ def make_figures(outdir):
         plt.close(fig)
         written.append("fig_open_rates.png")
 
-    steps = read("steps.csv")
+    steps = read(CSV_PREFIX + "steps.csv")
     ladder = [r for r in steps if r["tag"] in ("up_5c", "down_5c")]
     if ladder:
         fig, axes = plt.subplots(2, 2, figsize=(10, 7))
@@ -956,11 +959,11 @@ def make_figures(outdir):
         plt.close(fig)
         written.append("fig_5c_steps.png")
 
-    big = [e for e in read("events.csv") if e["kind"] == "STEP" and e["tag"] in ("big_up", "big_down")]
+    big = [e for e in read(CSV_PREFIX + "events.csv") if e["kind"] == "STEP" and e["tag"] in ("big_up", "big_down")]
     if big:
         wanted = {e["event"]: e for e in big}
         traces = {name: [] for name in wanted}
-        with open(os.path.join(outdir, "samples.csv"), encoding="utf-8") as f:
+        with open(os.path.join(outdir, CSV_PREFIX + "samples.csv"), encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 if row["event"] in traces and row["plate_c"]:
                     t_rel = float(row["t_s"]) - float(wanted[row["event"]]["t_begin_s"])
@@ -1132,7 +1135,7 @@ def main(argv=None):
         cfg.include_ref_end = False
 
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    outdir = args.outdir or os.path.join(HERE, "perf_runs", f"bands_{stamp}")
+    outdir = args.outdir or os.path.join(HERE, "perf_runs", f"PerfBands_{stamp}")
     notes = {}
     if args.sim:
         if cfg.room_c is None or cfg.room_rh_pct is None:

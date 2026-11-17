@@ -23,7 +23,7 @@ echo "================================================================"
 echo ""
 echo "[1/8] 라이브러리 설치 ..."
 sudo apt update
-sudo apt install -y git python3-dev python3-serial python3-pytz python3-numpy
+sudo apt install -y git tmux python3-dev python3-serial python3-pytz python3-numpy
 
 sudo apt remove -y python3-rpi-lgpio 2>/dev/null || true
 pip3 install RPi.GPIO --break-system-packages

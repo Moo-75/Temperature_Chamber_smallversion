@@ -64,6 +64,13 @@ python3 maze.py
 python3 maintemp.py
 ```
 
+원격 셸이 끊겨도 실험이 계속 돌게 하려면 `python3 maintemp.py` 대신 tmux 안에서 실행한다 (`sudo apt install -y tmux` 필요):
+
+```bash
+bash run_detached.sh                 # = python3 maintemp.py 를 tmux 세션 'chamber' 에서 실행
+bash run_detached.sh                 # 끊긴 뒤 다시 접속하면 같은 세션에 다시 붙는다
+```
+
 클론 Arduino는 VID/PID가 다를 수 있다. 그때는 `link_arduino.sh`가 `/dev/ttyACM*`를 `/dev/arduino`로 직접 연결한다.
 
 ## 트러블슈팅

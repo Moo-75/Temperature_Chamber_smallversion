@@ -1,37 +1,14 @@
 #!/usr/bin/env python3
-"""Band performance task for the small Peltier chamber, 10-40 C (plate sensor only).
+"""Band performance task: 5-45 C open-loop sweeps, 10-40 C analysis (control sensor).
 
-Measures
-  OPEN_HEAT  full duty (+1, FORCE_PWM) from the cooling floor up to 40 C. Time and
-             mean rate in each 5 C band: the open-loop heating limit of the plant.
-  OPEN_COOL  full duty (-1) from 40 C down to the cooling floor, same bands.
-  BIG_UP     closed-loop step from the floor to 40 C, controller in charge: rise time,
-             overshoot, settling time (the total time), steady error, duty use.
-             Settling time = start of the final run inside +/-0.5 C that lasted 60 s
-             with no excursion after it; the hold then continues for hold_s.
-  BIG_DOWN   closed-loop step from 40 C to the floor.
-  LADDER     5 C steps in round trips. One round trip = up 10->15, ..., 35->40 C, then
-             down 40->35, ..., 15->10 C. The steps of a round trip run back to back with
-             the controller on. Each step's numbers are reported as mean +/- SD over the
-             round trips, and the first and last round trips are compared (drift).
-  REF_END    one 10->15 C step at the end, after the ladder (a second drift check).
-
-Rest policy. A rest is duty 0 for a fixed time (rest_fixed_s, 5 min). It is not gated on
-steadiness: the plate slope at its end is logged, so a rest that ends while still drifting
-shows up in the data.
-  - before OPEN_COOL, BIG_UP, BIG_DOWN and the LADDER, when the event before drove the chamber;
-  - inside the ladder, after every rest_every_round_trips round trips (not after the last).
-No rest before REF_END. A sweep or step that starts from a stopped controller is preceded
-by an unscored move to its start point (prep). The baseline is the only gated wait: duty 0
-until the plate is quasi-steady.
-
-Limits: targets are 10-40 C. The abort limits are wider (abort_high_c, abort_low_c)
-so that overshoot can be seen. Cooling is limited by the dew point: the floor is the
-dew point plus dew_margin_c, so the room temperature and humidity must be entered.
-Heating and cooling both start at the floor (a sweep or step needs a settled start
-point), so nothing below the floor is measured. Bands below it are listed in the summary.
-The control sensor is the only check on the dew point. If the plate surface is colder
-than the sensor during cooling, condensation can start above the floor.
+Measures four open-loop 5->45->5 C round trips and four closed-loop
+5 C step round trips over the 10-40 C range (subject to dew-point floor).
+Each change of direction is separated by a 10-minute duty-zero rest and
+closed-loop preparation at the next starting temperature. A final reference
+step follows the ladder. Temperature abort limits are disabled by operator
+request; sensor-failure and timeout handling remain. Duty-zero rests do not
+prevent thermal overshoot. Dew point is estimated from operator-entered values
+and is not verified. Condensation risk at 5 C remains when dew point is unknown.
 
 Firmware used unchanged (peltier_operating_system.ino). Closed-loop steps use SET_TEMP,
 START, STOP and GET_CTRL. Sweeps use FORCE_PWM; rests use STOP and GET_TEMP.
@@ -39,7 +16,7 @@ The simulator copies the firmware control law roughly; it checks the logic only.
 
 Usage
   python perf_bands.py --sim --outdir <folder> --config <json with room_c, room_rh_pct>
-  python perf_bands.py --plan pilot    # first real run: heating sweep and big bump up only
+  python perf_bands.py --plan pilot    # first real run: one heating sweep only
   python perf_bands.py                 # full run on the real chamber (asks first)
 
 Outputs per run: PerfBands_samples.csv (10 Hz), PerfBands_events.csv, PerfBands_open_bands.csv,
@@ -92,15 +69,15 @@ class Config:
     target_max_c: float = 40.0
     band_width_c: float = 5.0
     dew_margin_c: float = 2.0
-    abort_high_c: float = 43.0
-    abort_low_c: float = 5.0
+    open_min_c: float = 5.0
+    open_max_c: float = 45.0
     room_c: Optional[float] = None
     room_rh_pct: Optional[float] = None
     # baseline and fixed rests
-    baseline_s: float = 900.0
+    baseline_s: float = 300.0
     baseline_max_s: float = 1800.0
     plate_slope_max: float = 0.003      # C/s over 120 s; used by the baseline only
-    rest_fixed_s: float = 300.0         # duty 0 between events, a fixed time
+    rest_fixed_s: float = 600.0         # duty 0 between directions, a fixed time
     # closed-loop steps
     prep_timeout_s: float = 900.0
     step_timeout_s: float = 900.0
@@ -110,7 +87,7 @@ class Config:
     hold_big_s: float = 120.0
     # 5 C ladder: round trips 10 -> 40 -> 10
     ladder_round_trips: int = 4
-    rest_every_round_trips: int = 2     # a fixed rest after every this many round trips (not after the last)
+    open_round_trips: int = 4
     # open-loop sweeps
     sweep_timeout_s: float = 300.0
     plateau_window_s: float = 60.0
@@ -118,8 +95,7 @@ class Config:
     # output
     include_ref_end: bool = True        # one reference 10 -> 15 C step at the end
     make_plots: bool = True             # PNG curves after the run (needs matplotlib)
-    stages: tuple = ()                  # empty: all stages. Names: open_heat, open_cool, big_up,
-                                        # big_down, ladder, ref_end
+    stages: tuple = ()                  # empty: all stages; open_heat, open_cool, ladder, ref_end
 
 
 # ---------- ranges and helpers ----------
@@ -493,8 +469,6 @@ class Session:
         self.cfg = cfg
         self.rec = rec
         self.buf = deque()
-        self.abort_low = cfg.abort_low_c
-        self.abort_high = cfg.abort_high_c
         self.bad = 0
         self.phase = "INIT"
         self.event = ""
@@ -521,11 +495,6 @@ class Session:
         self.rec.sample(s, self.phase, self.event, self.tag, self.direction)
         if self.bad >= 3:
             raise Abort("plate reading invalid 3 times in a row")
-        if plate is not None:
-            if plate > self.abort_high:
-                raise Abort(f"plate {plate:.2f} C above {self.abort_high:.1f} C")
-            if plate < self.abort_low:
-                raise Abort(f"plate {plate:.2f} C below {self.abort_low:.1f} C (dew point guard)")
         return s
 
     # ----- windows -----
@@ -652,7 +621,7 @@ class Session:
         print(f"  prep to {target:g} C: settled")
         return True
 
-    def sweep(self, direction, bound, edges, tag):
+    def sweep(self, direction, bound, edges, tag, round_trip=None):
         """Open-loop full duty until the plate passes `bound` (or plateaus, or times out)."""
         cfg = self.cfg
         self.seq += 1
@@ -708,7 +677,7 @@ class Session:
             span = abs(e - prev_level)
             dur = t_e - prev_t
             self.rec.bands.append({
-                "tag": tag, "direction": direction,
+                "tag": tag, "direction": direction, "round_trip": round_trip,
                 "band": f"{round(prev_level, 1):g}-{e:g}",
                 "lo_c": round(min(prev_level, e), 2), "hi_c": round(max(prev_level, e), 2),
                 "span_c": round(span, 3), "t_start_s": round(prev_t, 2), "t_end_s": round(t_e, 2),
@@ -718,7 +687,7 @@ class Session:
             })
             prev_level, prev_t = e, t_e
         end_plate = samples[-1].plate if samples else None
-        self._event("SWEEP", eid, tag, t0, t_end, direction=direction, reason=reason,
+        self._event("SWEEP", eid, tag, t0, t_end, direction=direction, round_trip=round_trip, reason=reason,
                     start_c=round(level, 2), end_c=fmt(end_plate, 2))
         print(f"  sweep [{tag}] from {level:.1f} C: {reason}, ended at {fmt(end_plate, 2)} C "
               f"after {(t_end - t0):.0f} s")
@@ -790,26 +759,24 @@ class Session:
 # ---------- protocol ----------
 
 def run_ladder(sess, cfg, valid):
-    """5 C steps as round trips: up 10 -> 40 (one step per band), then down 40 -> 10.
-    The steps of a round trip run back to back with the controller on. A fixed rest at
-    duty 0 follows every rest_every_round_trips round trips, but not the last one.
-    Returns False if the start point did not settle (the ladder is then stopped)."""
+    """5 C closed-loop steps, with a duty-zero rest at every direction change."""
     up = list(valid)
     down = [(hi, lo) for lo, hi in reversed(valid)]
-    n = cfg.ladder_round_trips
-    for rt in range(1, n + 1):
-        print(f"5 C round trip {rt} of {n}")
-        if not sess.running:            # after a rest, or after an event that stopped the drive
-            if not sess.prep(up[0][0]):
-                print("ladder stopped: the start point did not settle")
-                sess.rec.notes.append(f"5 C 사다리 중단: 시작점 {up[0][0]:g} C 가 정착하지 않음 (참조 계단도 생략)")
-                return False
+    for rt in range(1, cfg.ladder_round_trips + 1):
+        print(f"5 C round trip {rt} of {cfg.ladder_round_trips}")
+        if not sess.running and not sess.prep(up[0][0]):
+            sess.rec.notes.append("5 C 사다리 중단: 가열 시작 온도 준비 실패")
+            return False
         for a, b in up:
             sess.step(a, b, "up_5c", cfg.hold_5c_s, round_trip=rt, stop_after=False)
+        sess.pause(f"ladder_after_heat_{rt}", cfg.rest_fixed_s)
+        if not sess.prep(down[0][0]):
+            sess.rec.notes.append("5 C 사다리 중단: 냉각 시작 온도 준비 실패")
+            return False
         for a, b in down:
             sess.step(a, b, "down_5c", cfg.hold_5c_s, round_trip=rt, stop_after=False)
-        if rt < n and rt % cfg.rest_every_round_trips == 0:
-            sess.pause("ladder_rest", cfg.rest_fixed_s)
+        if rt < cfg.ladder_round_trips:
+            sess.pause(f"ladder_after_cool_{rt}", cfg.rest_fixed_s)
     sess.stop_drive()
     return True
 
@@ -872,6 +839,7 @@ def summarize(cfg, dew, low, valid, skipped, bands, steps, notes):
     lines.extend(notes)
     for direction, name in ((1, "가열"), (-1, "냉각")):
         rows = [r for r in bands if r["direction"] == direction and r["rate_c_per_s"] is not None]
+        rows = [r for r in rows if r["lo_c"] >= cfg.target_min_c and r["hi_c"] <= cfg.target_max_c]
         if rows:
             lines.append(f"개방루프 구간별 속도 ({name}, 듀티 100 %):")
             for r in rows:
@@ -914,11 +882,15 @@ def make_figures(outdir):
         fig, ax = plt.subplots(figsize=(6, 4))
         for direction, label, color in ((1, "heating, full duty", "#D55E00"),
                                         (-1, "cooling, full duty", "#0072B2")):
-            pts = sorted(((float(r["lo_c"]) + float(r["hi_c"])) / 2.0, float(r["rate_c_per_s"]))
-                         for r in bands if r["direction"] == str(direction) and r["rate_c_per_s"]
-                         and float(r["span_c"]) >= 4.5)  # full 5 C bands only
-            if pts:
-                ax.plot([p[0] for p in pts], [p[1] for p in pts], "o-", color=color, label=label)
+            runs = sorted({r.get("round_trip", "") for r in bands if r["direction"] == str(direction)})
+            for i, rt in enumerate(runs):
+                pts = sorted(((float(r["lo_c"]) + float(r["hi_c"])) / 2.0, float(r["rate_c_per_s"]))
+                             for r in bands if r["direction"] == str(direction) and r["rate_c_per_s"]
+                             and r.get("round_trip", "") == rt and float(r["span_c"]) >= 4.5
+                             and float(r["lo_c"]) >= 10 and float(r["hi_c"]) <= 40)
+                if pts:
+                    ax.plot([p[0] for p in pts], [p[1] for p in pts], "o-", color=color,
+                            alpha=0.65, label=label if i == 0 else None)
         ax.set_xlabel("band midpoint (C)")
         ax.set_ylabel("mean rate in band (C/s)")
         ax.set_title("Open-loop rate per 5 C band")
@@ -998,13 +970,15 @@ def run_protocol(dev, cfg, outdir, meta):
             raise Abort(f"EN_MODE check failed (reply {mode!r})")
         meta["en_mode_reply"] = mode
         dew, low = floor_info(cfg)
-        sess.abort_low = max(cfg.abort_low_c, dew)
         bands = band_list(cfg)
         valid = [(lo, hi) for lo, hi in bands if lo >= low - 1e-9]
         skipped = [(lo, hi) for lo, hi in bands if lo < low - 1e-9]
         high = cfg.target_max_c
         clamped = low > cfg.target_min_c + 1e-9
-        meta.update({"dew_point_c": round(dew, 2), "cooling_floor_c": round(low, 2),
+        meta.update({"open_sweep_range_c": [cfg.open_min_c, cfg.open_max_c],
+                     "open_analysis_range_c": [cfg.target_min_c, cfg.target_max_c],
+                     "temperature_abort_enabled": False,
+                     "dew_point_c": round(dew, 2), "cooling_floor_c": round(low, 2),
                      "valid_bands": valid, "skipped_bands": skipped})
         print(f"dew point {dew:.1f} C -> cooling floor {low:.1f} C; bands used {len(valid)}, skipped {len(skipped)}")
 
@@ -1012,27 +986,26 @@ def run_protocol(dev, cfg, outdir, meta):
             return not cfg.stages or name in cfg.stages
 
         sess.baseline()
-        # open-loop sweeps and big steps; each one that follows a driven event waits a fixed rest first
-        if want("open_heat"):
-            sess.pause_if_driven("before_open_heat")
-            if sess.prep(low):
-                sess.sweep(+1, high, heat_edges(bands, low), "open_heat")
-        if want("open_cool"):
-            sess.pause_if_driven("before_open_cool")
-            if sess.prep(high):
-                sess.sweep(-1, low, cool_edges(bands, high, low), "open_cool")
-        if want("big_up"):
-            sess.pause_if_driven("before_big_up")
-            if sess.prep(low):
-                sess.step(low, high, "big_up", cfg.hold_big_s, clamped=clamped)
-        if want("big_down"):
-            sess.pause_if_driven("before_big_down")
-            if sess.prep(high):
-                sess.step(high, low, "big_down", cfg.hold_big_s, clamped=clamped)
+        # Each round trip includes independent full-power heating and cooling.
+        open_bands = [(cfg.open_min_c + i * cfg.band_width_c,
+                       cfg.open_min_c + (i + 1) * cfg.band_width_c)
+                      for i in range(int(round((cfg.open_max_c - cfg.open_min_c) / cfg.band_width_c)))]
+        if want("open_heat") or want("open_cool"):
+            for rt in range(1, cfg.open_round_trips + 1):
+                for name, start, bound, direction in (
+                    ("open_heat", cfg.open_min_c, cfg.open_max_c, 1),
+                    ("open_cool", cfg.open_max_c, cfg.open_min_c, -1),
+                ):
+                    if not want(name):
+                        continue
+                    sess.pause_if_driven(f"before_{name}_{rt}")
+                    if sess.prep(start):
+                        edges = heat_edges(open_bands, start) if direction > 0 else cool_edges(open_bands, start, bound)
+                        sess.sweep(direction, bound, edges, name, round_trip=rt)
         # 5 C ladder in round trips, then one reference step for drift
         ladder_ok = True
         if want("ladder") and valid:
-            sess.pause_if_driven("before_ladder")   # the big down step drove the chamber
+            sess.pause_if_driven("before_ladder")
             print("5 C ladder")
             ladder_ok = run_ladder(sess, cfg, valid)
         if ladder_ok and cfg.include_ref_end and valid and want("ref_end"):
@@ -1051,6 +1024,12 @@ def run_protocol(dev, cfg, outdir, meta):
         summary = []
         if dew is not None:
             summary = summarize(cfg, dew, low, valid, skipped, rec.bands, rec.steps, rec.notes)
+        if status == "completed" and (
+            any("준비 이동" in note or "사다리 중단" in note for note in rec.notes)
+            or any(event.get("kind") == "SWEEP" and event.get("reason") != "bound" for event in rec.events)
+            or any(step.get("reason") != "held" for step in rec.steps)
+        ):
+            status = "incomplete: one or more stages skipped or unfinished"
         meta["status"] = status
         meta["ended"] = datetime.now().isoformat(timespec="seconds")
         meta["summary"] = summary
@@ -1094,7 +1073,8 @@ def operator_checks(cfg, notes):
     skipped = [(lo, hi) for lo, hi in band_list(cfg) if lo < low - 1e-9]
     if skipped:
         print("  이 온도 아래는 측정하지 않습니다: " + ", ".join(f"{lo:g}-{hi:g} C" for lo, hi in skipped))
-    print(f"  측정 범위: {low:.1f}-{cfg.target_max_c:g} C")
+    print(f"  폐회로 범위: {low:.1f}-{cfg.target_max_c:g} C; 개방루프: {cfg.open_min_c:g}-{cfg.open_max_c:g} C")
+    print("  주의: 온도 기준 자동 중단 없음; 5 C 도달 시 결로 위험을 독립적으로 확인해야 합니다.")
 
 
 def firmware_meta():
@@ -1108,7 +1088,8 @@ def main(argv=None):
     ap.add_argument("--sim", action="store_true", help="run against the simulated chamber")
     ap.add_argument("--config", help="JSON file with Config overrides")
     ap.add_argument("--plan", choices=["full", "pilot"], default="full",
-                    help="pilot: heating sweep and big bump up only (a short first check run)")
+                    help="pilot: one heating sweep only (a short first check run)")
+    ap.add_argument("--chamber-id", help="unique physical chamber identifier, recorded in metadata")
     ap.add_argument("--port", help="serial port (default /dev/arduino)")
     ap.add_argument("--outdir", help="output folder")
     ap.add_argument("--seed", type=int, help="random seed (used by the simulator)")
@@ -1124,19 +1105,25 @@ def main(argv=None):
             if key not in Config.__dataclass_fields__:
                 raise SystemExit(f"unknown config key: {key}")
             setattr(cfg, key, value)
-    if cfg.ladder_round_trips < 1 or cfg.rest_every_round_trips < 1:
-        raise SystemExit("ladder_round_trips and rest_every_round_trips must be 1 or more")
+    if cfg.ladder_round_trips < 1 or cfg.open_round_trips < 1:
+        raise SystemExit("ladder_round_trips and open_round_trips must be 1 or more")
     if args.port:
         cfg.port = args.port
     if args.seed is not None:
         cfg.seed = args.seed
     if args.plan == "pilot":
-        cfg.stages = ("open_heat", "big_up")
+        cfg.stages = ("open_heat",)
+        cfg.open_round_trips = 1
         cfg.include_ref_end = False
 
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outdir = args.outdir or os.path.join(HERE, "perf_runs", f"PerfBands_{stamp}")
     notes = {}
+    chamber_id = (args.chamber_id or "").strip()
+    if not args.sim and not chamber_id:
+        chamber_id = input("챔버 번호 또는 고유 ID: ").strip()
+        if not chamber_id:
+            raise SystemExit("챔버 ID가 필요합니다. --chamber-id 또는 입력으로 지정하세요.")
     if args.sim:
         if cfg.room_c is None or cfg.room_rh_pct is None:
             raise SystemExit("--sim needs room_c and room_rh_pct in --config")
@@ -1152,6 +1139,7 @@ def main(argv=None):
         "started": datetime.now().isoformat(timespec="seconds"),
         "script": os.path.basename(__file__),
         "sim": bool(args.sim),
+        "chamber_id": chamber_id or None,
         **firmware_meta(),
         "device": dev.info(),
         "config": asdict(cfg),

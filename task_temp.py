@@ -33,6 +33,10 @@ TL_COL_NAME = [
 TASK_START_TEMP = 24.0
 TASK_TEMP_MIN = 10.0
 TASK_TEMP_MAX = 36.0
+TLC_TEMP_MIN = 16.0
+TLC_TEMP_MAX = 40.0
+TLC_MEAN_TEMP_LIMIT = 30.0
+TLC_UPPER_DWELL_SEC = 20 * 60
 LOW_TEMP_TOLERANCE = 0.5
 LOW_TEMP_DWELL_SEC = 20 * 60
 MEAN_TEMP_LIMIT = 24.0
@@ -40,30 +44,39 @@ TL0_DRIFT_C_PER_MIN = 3.0
 
 
 class TemperatureStopMonitor:
-    """Stop on sustained lower-bound exposure or a high rolling mean temperature."""
+    """Check the task's dwell condition and measured-temperature rolling mean."""
 
-    def __init__(self, mean_window_min=30.0, sample_interval_sec=1.0):
+    def __init__(self, mean_window_min=30.0, sample_interval_sec=1.0, *, cooling=False):
+        self.cooling = cooling
         self.mean_window_sec = float(mean_window_min) * 60.0
         self.sample_interval_sec = float(sample_interval_sec)
         self.started_at = time.monotonic()
         self.samples = deque()
         self.last_sample_at = None
         self.first_sample_at = None
-        self.lower_bound_since = None
+        self.bound_since = None
 
-    def check(self, temperature, now=None):
+    def check(self, temperature, now=None, *, target_temperature=None):
         now = time.monotonic() if now is None else now
-        if temperature is None:
-            self.lower_bound_since = None
-            return None
 
-        if temperature <= TASK_TEMP_MIN + LOW_TEMP_TOLERANCE:
-            if self.lower_bound_since is None:
-                self.lower_bound_since = now
-            elif now - self.lower_bound_since >= LOW_TEMP_DWELL_SEC:
-                return "DisengagementStop"
+        if self.cooling:
+            at_bound = target_temperature is not None and target_temperature >= TLC_TEMP_MAX
+            dwell_sec = TLC_UPPER_DWELL_SEC
+            dwell_reason = "UpperBoundStop"
         else:
-            self.lower_bound_since = None
+            at_bound = temperature is not None and temperature <= TASK_TEMP_MIN + LOW_TEMP_TOLERANCE
+            dwell_sec = LOW_TEMP_DWELL_SEC
+            dwell_reason = "DisengagementStop"
+        if at_bound:
+            if self.bound_since is None:
+                self.bound_since = now
+            elif now - self.bound_since >= dwell_sec:
+                return dwell_reason
+        else:
+            self.bound_since = None
+
+        if temperature is None:
+            return None
 
         if self.last_sample_at is None or now - self.last_sample_at >= self.sample_interval_sec:
             self.samples.append((now, temperature))
@@ -83,12 +96,23 @@ class TemperatureStopMonitor:
         )
         if now - self.started_at >= self.mean_window_sec and history_covers_window:
             mean_temp = math.fsum(value for _, value in self.samples) / len(self.samples)
-            if mean_temp >= MEAN_TEMP_LIMIT:
+            if self.cooling and mean_temp <= TLC_MEAN_TEMP_LIMIT:
+                return "MeanTemperatureStop"
+            if not self.cooling and mean_temp >= MEAN_TEMP_LIMIT:
                 return "MeanTemperatureStop"
         return None
 
 
-def stop_criteria_config(mean_window_min):
+def stop_criteria_config(mean_window_min, *, cooling=False):
+    if cooling:
+        return {
+            "upper_bound_c": TLC_TEMP_MAX,
+            "upper_bound_dwell_min": TLC_UPPER_DWELL_SEC / 60.0,
+            "upper_bound_source": "target_temperature",
+            "mean_temperature_c": TLC_MEAN_TEMP_LIMIT,
+            "mean_comparison": "at_or_below",
+            "mean_window_min": float(mean_window_min),
+        }
     return {
         "lower_bound_c": TASK_TEMP_MIN,
         "lower_bound_tolerance_c": LOW_TEMP_TOLERANCE,
@@ -426,11 +450,8 @@ class Task:
             if feedback_window_no_choice is None
             else feedback_window_no_choice
         )
-        # The chamber-wide protocol uses one start temperature and one safe range.
-        start_temp = TASK_START_TEMP
-        temp_min = TASK_TEMP_MIN
-        temp_max = TASK_TEMP_MAX
-        mean_window_min = 45.0 if task_name == "TL2" else 30.0
+        mean_window_min = 45.0 if task_name in ("TL2", "TLC2") else 30.0
+        cooling = task_name in ("TLC1", "TLC2")
         file_name_td = self.file_trialdata + "_trial-wise.csv"
         directory = os.path.dirname(file_name_td)
         col_name_td = TL_COL_NAME
@@ -535,12 +556,13 @@ class Task:
             json.dump({
                 "task": task_name, "bump_choices": list(bump_choices),
                 "no_choice_drop_choices": list(no_choice_drop_choices),
+                "no_choice_delta_choices": [-drop if drop else 0.0 for drop in no_choice_drop_choices],
                 "start_temp": first_target, "temp_min": temp_min, "temp_max": temp_max,
                 "choice_window_s": choice_window, "feedback_after_poke_s": fb_after_choice,
                 "feedback_after_no_choice_s": fb_after_no_choice, "task_time_min": task_time,
                 "poke_flash_s": poke_flash_s, "poke_flash_brightness": poke_flash_brightness,
                 "probe_min": probe_min, "probe_temp": probe_temp if probe_min > 0 else None,
-                "stop_criteria": stop_criteria_config(mean_window_min),
+                "stop_criteria": stop_criteria_config(mean_window_min, cooling=cooling),
                 "yoke_source": None if yoke is None else yoke.get("path"),
                 "yoke_source_session": None if yoke is None else yoke.get("session"),
                 "outcome_delay_s": outcome_delay_s, "omission_frac": omission_frac,
@@ -551,7 +573,7 @@ class Task:
         # every target the task commands, as [seconds from task start, target]
         target_log = []
         start_Ex = time.time()
-        stop_monitor = TemperatureStopMonitor(mean_window_min)
+        stop_monitor = TemperatureStopMonitor(mean_window_min, cooling=cooling)
         stop_reason = None
         session_done = False
 
@@ -559,8 +581,8 @@ class Task:
             nonlocal stop_reason, session_done
             if session_done:
                 return True
-            curr_temp, _ = self._get_shared_temperatures()
-            stop_reason = stop_monitor.check(curr_temp)
+            curr_temp, target_temp = self._get_shared_temperatures()
+            stop_reason = stop_monitor.check(curr_temp, target_temperature=target_temp)
             if stop_reason is None and (time.time() - start_Ex) >= task_time * 60:
                 stop_reason = "TaskTimeLimit"
             if stop_reason is not None:
@@ -867,12 +889,23 @@ class Task:
 
 
     def TL0(self):
-        task_name = "TL0"
-        bump_choices = (5.0, 6.0, 7.0)
+        self._run_continuous_temperature_lift(
+            "TL0", (5.0, 6.0, 7.0), -TL0_DRIFT_C_PER_MIN,
+            TASK_TEMP_MIN, TASK_TEMP_MAX,
+        )
+
+    def TLC0(self):
+        self._run_continuous_temperature_lift(
+            "TLC0", (-3.0, -4.0, -5.0), 1.5, TLC_TEMP_MIN, TLC_TEMP_MAX,
+        )
+
+    def _run_continuous_temperature_lift(self, task_name, bump_choices, drift_c_per_min,
+                                         temp_min, temp_max):
         hold_sec = 60.0
-        drift_rate = -TL0_DRIFT_C_PER_MIN / 60.0
+        drift_rate = drift_c_per_min / 60.0
         task_time = 60.0
         mean_window_min = 30.0
+        cooling = task_name == "TLC0"
         file_name_td = self.file_trialdata + "_trial-wise.csv"
         directory = os.path.dirname(file_name_td) or "."
         os.makedirs(directory, exist_ok=True)
@@ -883,27 +916,27 @@ class Task:
                 "poke_hold_s": hold_sec,
                 "baseline_drift_c_per_min": drift_rate * 60.0,
                 "start_temp": TASK_START_TEMP,
-                "temp_min": TASK_TEMP_MIN,
-                "temp_max": TASK_TEMP_MAX,
+                "temp_min": temp_min,
+                "temp_max": temp_max,
                 "task_time_min": task_time,
-                "stop_criteria": stop_criteria_config(mean_window_min),
+                "stop_criteria": stop_criteria_config(mean_window_min, cooling=cooling),
             }, f, indent=1)
 
         start_Ex = time.time()
-        stop_monitor = TemperatureStopMonitor(mean_window_min)
+        stop_monitor = TemperatureStopMonitor(mean_window_min, cooling=cooling)
         target_log = []
         stop_reason = None
         poke_count = 0
 
         def command_target(value):
-            value = max(TASK_TEMP_MIN, min(float(value), TASK_TEMP_MAX))
+            value = max(temp_min, min(float(value), temp_max))
             self.peltier_queue.put(("SET_TEMP", value))
             target_log.append([round(time.time() - start_Ex, 3), value])
             return value
 
         def set_drift(rate):
             self.peltier_queue.put((
-                "SET_ATTENUATION_DIRECT", (float(rate), TASK_TEMP_MIN, TASK_TEMP_MAX)
+                "SET_ATTENUATION_DIRECT", (float(rate), temp_min, temp_max)
             ))
 
         def log_row(event, curr=None, target=None, trial_no=None, bump="n", delta="n"):
@@ -929,8 +962,10 @@ class Task:
         curr_temp, target_temp = self._get_shared_temperatures()
         log_row("SessionStart", curr_temp, target_temp, trial_no=0)
         print(
-            f"=== TL0: continuous poke, +5/6/7°C; target held 60s after each poke, "
-            f"then drifts {drift_rate * 60.0:g}°C/min; start 24°C, 10-36°C ==="
+            f"=== {task_name}: continuous poke, "
+            f"{'/'.join(f'{bump:+g}' for bump in bump_choices)}°C; target held 60s after each poke, "
+            f"then drifts {drift_c_per_min:+g}°C/min; "
+            f"start {TASK_START_TEMP:g}°C, {temp_min:g}-{temp_max:g}°C ==="
         )
 
         previous_poke = self.sensor.poked()
@@ -940,7 +975,7 @@ class Task:
         while not session_done:
             now = time.time()
             curr_temp, target_temp = self._get_shared_temperatures()
-            stop_reason = stop_monitor.check(curr_temp)
+            stop_reason = stop_monitor.check(curr_temp, target_temperature=target_temp)
             if stop_reason is None and now - start_Ex >= task_time * 60.0:
                 stop_reason = "TaskTimeLimit"
             if stop_reason is not None:
@@ -952,7 +987,7 @@ class Task:
                 hold_until = None
                 log_row("DriftResume", curr_temp, target_temp)
             if hold_until is None and target_temp is not None:
-                current_target = max(TASK_TEMP_MIN, min(target_temp, TASK_TEMP_MAX))
+                current_target = max(temp_min, min(target_temp, temp_max))
 
             poked = self.sensor.poked()
             if poked and not previous_poke:
@@ -966,7 +1001,7 @@ class Task:
                 hold_until = now + hold_sec
                 log_row("Poke", curr_temp, new_target, bump=bump, delta=actual_delta)
                 print(
-                    f"[TL0] poke {poke_count}: {base_temp:.1f} + {bump:.0f} -> "
+                    f"[{task_name}] poke {poke_count}: {base_temp:.1f} {bump:+.0f} -> "
                     f"{new_target:.1f}°C target; hold through {hold_until - start_Ex:.1f}s"
                 )
             previous_poke = poked
@@ -982,14 +1017,14 @@ class Task:
                 self.data, self.mouseid, self.trainingstep, self.file_trialdata, task_name,
                 schedule=target_log, task_time_min=task_time, duration_s=duration_s,
                 completed=stop_reason == "TaskTimeLimit", n_trials=poke_count, n_pokes=poke_count,
-                temp_min=TASK_TEMP_MIN, temp_max=TASK_TEMP_MAX,
+                temp_min=temp_min, temp_max=temp_max,
             )
-            print(f"[TL0] target schedule saved: {path}")
+            print(f"[{task_name}] target schedule saved: {path}")
         except Exception as e:
-            print(f"[TL0] could not save target schedule: {e}")
+            print(f"[{task_name}] could not save target schedule: {e}")
 
         self.stop_event.set()
-        print(f"=== TL0 Session Ended ({stop_reason}) ===")
+        print(f"=== {task_name} Session Ended ({stop_reason}) ===")
 
     def TL1(self):
         print("=== TL1: +5/6/7°C poke, -1/2/3°C no-choice, 40s choice / 10s feedback, 10-36°C ===")
@@ -1009,6 +1044,29 @@ class Task:
             choice_window=30.0,
             feedback_window=10.0,
             task_name="TL2",
+        )
+
+    def TLC1(self):
+        self._run_temperature_lift(
+            bump_choices=(-3.0, -4.0, -5.0),
+            # The shared trial loop subtracts each no-choice drop from the target.
+            no_choice_drop_choices=(0.0, -2.0),
+            temp_min=TLC_TEMP_MIN,
+            temp_max=TLC_TEMP_MAX,
+            choice_window=40.0,
+            feedback_window=10.0,
+            task_name="TLC1",
+        )
+
+    def TLC2(self):
+        self._run_temperature_lift(
+            bump_choices=(-2.0, -4.0, -6.0),
+            no_choice_drop_choices=(0.0, -2.0),
+            temp_min=TLC_TEMP_MIN,
+            temp_max=TLC_TEMP_MAX,
+            choice_window=30.0,
+            feedback_window=10.0,
+            task_name="TLC2",
         )
 
 
@@ -1057,3 +1115,18 @@ class TL1_Task(Task):
 class TL2_Task(Task):
     def task(self):
         self.TL2()
+
+
+class TLC0_Task(Task):
+    def task(self):
+        self.TLC0()
+
+
+class TLC1_Task(Task):
+    def task(self):
+        self.TLC1()
+
+
+class TLC2_Task(Task):
+    def task(self):
+        self.TLC2()

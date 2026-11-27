@@ -1,6 +1,6 @@
 # Temperature_Chamber_smallversion
 
-Small temperature chamber for the Temperature Lift tasks (TLS / TLSB / TLY / TLC / TLM / TLV / TL0 / TL1 / TL2).
+Small temperature chamber for Temperature Lift and Cooling tasks (TLS / TLSB / TLY / TLC / TLM / TLV / TL0 / TL1 / TL2 / TLC0 / TLC1 / TLC2).
 
 - Raspberry Pi: poke, LED, TTL, task
 - Arduino: KY-013 temperature + one BTS7960 motor driver
@@ -29,7 +29,7 @@ cd ~/Desktop/Temperature_Chamber_smallversion
 python3 test_GPIO.py
 python3 maintemp.py
 # json -> test.json
-# task -> TLS, TLSB, TLY, TLC, TLM, TLV (or the earlier TL0, TL1, TL2)
+# task -> TLS, TLSB, TLY, TLC, TLM, TLV, TL0, TL1, TL2, TLC0, TLC1, TLC2
 ```
 
 All tasks start at a target of 24 °C and use a target range of 10–36 °C. The optional
@@ -48,6 +48,13 @@ TLS(B) → TLY → TLS → TLC → TLM → TLV.
 | `TL0` | No choice window. Target drifts continuously at −3 °C/min, the theoretical mean TL2 no-choice decrement (mean −2 °C per 40 s trial). Each poke raises the target by +5/6/7 °C and holds the new target for 60 s. Pokes during that hold are accepted, add another increment, and restart the 60 s hold. |
 | `TL1` | 40 s choice window and 10 s feedback; poke +5/6/7 °C; no choice −1/2/3 °C. |
 | `TL2` | 30 s choice window and 10 s feedback; poke +2/4/6 °C; no choice 0/−2/−4 °C. |
+| `TLC0` Continuous cooling | Each poke lowers the target by 3, 4, or 5 °C and restarts a 60 s hold. The target rises at 1.5 °C/min outside the hold. |
+| `TLC1` Cooling training | 40 s choice and 10 s feedback; poke −3/−4/−5 °C; no choice 0/+2 °C. |
+| `TLC2` Cooling experiment | 30 s choice and 10 s feedback; poke −2/−4/−6 °C; no choice 0/+2 °C. |
+
+TLC0, TLC1 and TLC2 start at a 24 °C target and clamp target commands to 16–40 °C.
+For TLC1 and TLC2, no-choice changes are shuffled in blocks of 20 with ten 0 °C and ten +2 °C outcomes.
+TLC1 targets lie on a 1 °C grid and TLC2 targets lie on a 2 °C grid.
 
 In trial-based tasks, an outcome changes the target at the response or window end. The
 controller then drives the chamber toward that target during feedback and keeps holding it
@@ -55,11 +62,13 @@ after feedback until a later outcome changes it. TLS–TLV mark a poke with a 0.
 at 100 % (normal brightness is `led_brightness` in test.json). Probe and yoked trials log
 Bump/OutcomeDelta = 0; `ProbeStart` / `ProbeEnd` rows mark the probe.
 
-Every task also ends at the 60 min task-time limit, if measured temperature stays at or below
-10.5 °C for 20 min continuously (lower-bound disengagement), or if the rolling mean measured
-temperature reaches 24 °C. The mean uses the latest 30 min for all tasks except TL2, which uses
-45 min; it is evaluated after a full window of measurements is available. The 10.5 °C cutoff
-allows 0.5 °C tolerance around the 10 °C lower bound.
+Every task has a 60 min task-time limit. TLC0–TLC2 also end when the target stays at
+40 °C for 20 min continuously, or when the measured rolling mean is at or below 30 °C.
+The rolling window is 30 min for TLC0 and TLC1 and 45 min for TLC2.
+
+Other tasks also end when measured temperature stays at or below 10.5 °C for 20 min
+continuously, or when the rolling mean reaches 24 °C. Their mean window is 30 min, except
+for TL2, which uses 45 min. Rolling means are evaluated after a full window is available.
 
 TLM/TLV extra TD rows: `OutcomeOn` (moment the delayed bump/drop is commanded), `Omission`
 (poke whose drawn Bump was not delivered; its Poke row has OutcomeDelta = 0),

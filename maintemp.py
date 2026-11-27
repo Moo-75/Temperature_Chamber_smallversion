@@ -10,7 +10,8 @@ import json
 import csv
 import maze
 from task_temp import (
-    TL0_Task, TL1_Task, TL2_Task, TLS_Task, TLSB_Task, TLY_Task, TLC_Task, TLM_Task, TLV_Task,
+    TL0_Task, TL1_Task, TL2_Task, TLC0_Task, TLC1_Task, TLC2_Task,
+    TLS_Task, TLSB_Task, TLY_Task, TLC_Task, TLM_Task, TLV_Task,
     list_yoke_sources, load_yoke_file,
 )
 import time
@@ -254,6 +255,9 @@ if __name__ == "__main__":
         "TL0": TL0_Task,
         "TL1": TL1_Task,
         "TL2": TL2_Task,
+        "TLC0": TLC0_Task,
+        "TLC1": TLC1_Task,
+        "TLC2": TLC2_Task,
     }
 
     while True:
@@ -269,7 +273,12 @@ To start enter the task name you want to run
     [TL0] TL0: continuous poke +5/6/7°C, target held 60s after each poke, then drifts -3°C/min
     [TL1] TL1: poke +5/6/7°C, no-choice -1/-2/-3°C (40s choice / 10s feedback)
     [TL2] TL2: poke +2/4/6°C, no-choice -0/-2/-4°C (30s choice / 10s feedback)
-    All tasks stop after 60 min, 20 min continuously at/below 10.5°C, or a 24°C rolling mean (30 min; TL2 45 min).
+    [TLC0] Continuous cooling: poke -3/-4/-5°C, 60s hold after each poke, then +1.5°C/min
+    [TLC1] Cooling training: poke -3/-4/-5°C, no-choice 0/+2°C (40s choice / 10s feedback)
+    [TLC2] Cooling experiment: poke -2/-4/-6°C, no-choice 0/+2°C (30s choice / 10s feedback)
+    TLC0, TLC1 and TLC2 start at a 24°C target and use 16-40°C target limits.
+    TLC0-TLC2 stop after 60 min, 20 min continuously at the 40°C target, or a measured rolling mean at/below 30°C (30 min; TLC2 45 min).
+    Other tasks stop after 60 min, 20 min continuously at/below 10.5°C, or a rolling mean at/above 24°C (30 min; TL2 45 min).
     [0] Exit
 """
         ).strip()

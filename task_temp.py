@@ -37,6 +37,7 @@ TLC_TEMP_MIN = 16.0
 TLC_TEMP_MAX = 40.0
 TLC_MEAN_TEMP_LIMIT = 30.0
 TLC_UPPER_DWELL_SEC = 20 * 60
+TLC_NO_CHOICE_DROPS = (0.0, -2.0, -2.0, -2.0, -2.0)
 LOW_TEMP_TOLERANCE = 0.5
 LOW_TEMP_DWELL_SEC = 20 * 60
 MEAN_TEMP_LIMIT = 24.0
@@ -1050,7 +1051,7 @@ class Task:
         self._run_temperature_lift(
             bump_choices=(-3.0, -4.0, -5.0),
             # The shared trial loop subtracts each no-choice drop from the target.
-            no_choice_drop_choices=(0.0, -2.0),
+            no_choice_drop_choices=TLC_NO_CHOICE_DROPS,
             temp_min=TLC_TEMP_MIN,
             temp_max=TLC_TEMP_MAX,
             choice_window=40.0,
@@ -1061,7 +1062,7 @@ class Task:
     def TLC2(self):
         self._run_temperature_lift(
             bump_choices=(-2.0, -4.0, -6.0),
-            no_choice_drop_choices=(0.0, -2.0),
+            no_choice_drop_choices=TLC_NO_CHOICE_DROPS,
             temp_min=TLC_TEMP_MIN,
             temp_max=TLC_TEMP_MAX,
             choice_window=30.0,

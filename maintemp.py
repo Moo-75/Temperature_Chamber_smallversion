@@ -274,8 +274,9 @@ To start enter the task name you want to run
     [TL1] TL1: poke +5/6/7°C, no-choice -1/-2/-3°C (40s choice / 10s feedback)
     [TL2] TL2: poke +2/4/6°C, no-choice -0/-2/-4°C (30s choice / 10s feedback)
     [TLC0] Continuous cooling: poke -3/-4/-5°C, 60s hold after each poke, then +1.5°C/min
-    [TLC1] Cooling training: poke -3/-4/-5°C, no-choice 0/+2°C (40s choice / 10s feedback)
-    [TLC2] Cooling experiment: poke -2/-4/-6°C, no-choice 0/+2°C (30s choice / 10s feedback)
+    [TLC1] Cooling training: poke -3/-4/-5°C (40s choice / 10s feedback)
+    [TLC2] Cooling experiment: poke -2/-4/-6°C (30s choice / 10s feedback)
+    TLC1 and TLC2 no-choice outcomes: +2°C (80%) or 0°C (20%).
     TLC0, TLC1 and TLC2 start at a 24°C target and use 16-40°C target limits.
     TLC0-TLC2 stop after 60 min, 20 min continuously at the 40°C target, or a measured rolling mean at/below 30°C (30 min; TLC2 45 min).
     Other tasks stop after 60 min, 20 min continuously at/below 10.5°C, or a rolling mean at/above 24°C (30 min; TL2 45 min).

@@ -49,11 +49,11 @@ TLS(B) → TLY → TLS → TLC → TLM → TLV.
 | `TL1` | 40 s choice window and 10 s feedback; poke +5/6/7 °C; no choice −1/2/3 °C. |
 | `TL2` | 30 s choice window and 10 s feedback; poke +2/4/6 °C; no choice 0/−2/−4 °C. |
 | `TLC0` Continuous cooling | Each poke lowers the target by 3, 4, or 5 °C and restarts a 60 s hold. The target rises at 1.5 °C/min outside the hold. |
-| `TLC1` Cooling training | 40 s choice and 10 s feedback; poke −3/−4/−5 °C; no choice 0/+2 °C. |
-| `TLC2` Cooling experiment | 30 s choice and 10 s feedback; poke −2/−4/−6 °C; no choice 0/+2 °C. |
+| `TLC1` Cooling training | 40 s choice and 10 s feedback; poke −3/−4/−5 °C; no choice +2 °C (80%) or 0 °C (20%). |
+| `TLC2` Cooling experiment | 30 s choice and 10 s feedback; poke −2/−4/−6 °C; no choice +2 °C (80%) or 0 °C (20%). |
 
 TLC0, TLC1 and TLC2 start at a 24 °C target and clamp target commands to 16–40 °C.
-For TLC1 and TLC2, no-choice changes are shuffled in blocks of 20 with ten 0 °C and ten +2 °C outcomes.
+TLC1 and TLC2 shuffle no-choice changes in blocks of 20 with sixteen +2 °C and four 0 °C outcomes.
 TLC1 targets lie on a 1 °C grid and TLC2 targets lie on a 2 °C grid.
 
 In trial-based tasks, an outcome changes the target at the response or window end. The
